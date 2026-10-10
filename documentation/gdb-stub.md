@@ -113,6 +113,6 @@ Limits of this first version:
 ## Tests
 
 `test/gdb/run_tests.sh` starts the emulator with the stub on a scratch port and
-runs `test/gdb/test_stub.py` against it (118 checks: registers, memory spaces,
+runs `test/gdb/test_stub.py` against it (119 checks: registers, memory spaces,
 breakpoints, stepping, watchpoints, monitor commands, input injection). It
 needs Python 3 and, to rebuild the small probe program, `avr-gcc`.
