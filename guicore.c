@@ -1045,6 +1045,7 @@ boole guicore_init(auint flags, const char* title)
  wndflags = 0U;
  if ((flags & GUICORE_FULLSCREEN) != 0U){ wndflags |= SDL_WINDOW_FULLSCREEN_DESKTOP; }
  else{ wndflags |= SDL_WINDOW_RESIZABLE; }
+ if ((flags & GUICORE_HIDDEN) != 0U){ wndflags |= SDL_WINDOW_HIDDEN; }
 
  renflags = SDL_RENDERER_ACCELERATED;
  if ((flags & GUICORE_NOVSYNC) == 0U){ renflags |= SDL_RENDERER_PRESENTVSYNC; }
@@ -1822,6 +1823,11 @@ void guicore_update(boole drop)
  int     pitch;
 
  if (drop){ return; }
+ /* A hidden window (an unattended run: --gdb-nolimit) shows nothing. The pixel
+ ** buffer, which screenshots read, is frame.c's and stays as it is drawn: only
+ ** the copy to the window and its present are left out, most of what a halted
+ ** frame costs a debugger that stops often */
+ if ((guicore_flags & GUICORE_HIDDEN) != 0U){ return; }
 
  guicore_getrendergeom(&texw, &texh, &offx, &offy);
 

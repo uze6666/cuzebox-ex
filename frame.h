@@ -56,6 +56,22 @@ boole frame_breakpoint_hit(boole clear, auint* out_word_addr);
 
 
 /*
+** Whether the last frame_run() was halted (a breakpoint, a step, the GDB
+** stub) before its frame's end, so the next call goes on with that frame:
+** what is done once a frame (the input capture and replay) is not done again
+** for it.
+*/
+boole frame_iscut(void);
+
+
+/*
+** The next frame_run() starts a frame whatever the last did (the emulator's
+** state was replaced by a frame's start).
+*/
+void  frame_setnew(void);
+
+
+/*
 ** Returns the received unsigned audio samples of the frame (normally 262).
 */
 uint8 const* frame_getaudio(void);

@@ -66,7 +66,7 @@ static auint vfat_node_cap;
 static auint vfat_build_cpos;
 
 static const uint8 vfat_data_mbr[] = {
- 0x00U, 0x00U, 0x00U,
+ 0xEBU, 0x3CU, 0x90U, /* Jump to bootstrap: FatFs and UzeFS take no volume without one */
  'C','U','Z','E','B','O','X',' ',
  0x00U,0x02U, 0x40U, 0x01U,0x00U, 0x02U,
  (CU_VFAT_ROOT_SIZE & 0xFFU), (CU_VFAT_ROOT_SIZE >> 8),

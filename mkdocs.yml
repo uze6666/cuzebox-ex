@@ -30,6 +30,8 @@ nav:
   - ESP8266 Emulation: esp8266-emulation.md
   - Netplay: netplay.md
   - Debugger: debugger.md
+  - GDB Stub: gdb-stub.md
+  - SD Card as a Host Folder: sd-host-directory.md
   - API Profiler: api-profiler.md
   - API Disassembly and Run Control: api-run-control.md
   - API Stack Inspection: api-stack.md

@@ -29,6 +29,7 @@
 
 #include "cu_spisd.h"
 #include "cu_vfat.h"
+#include "cu_sdb.h" /* The card's contents: cu_vfat.c, or cu_vfat2.c under --sdhost */
 #if defined(ENABLE_SD_TRACE) || defined(ENABLE_SD_REPLAY)
 #include "cu_avr.h"
 #endif
@@ -1568,7 +1569,7 @@ void  cu_spisd_reset(auint cycle)
   sd_crc16_table[byt] = (crc & 0xFFFFU);
  }
 
- cu_vfat_reset();
+ cu_sdb_reset();
 #ifdef ENABLE_SD_TRACE
  sd_hit_valid = FALSE;
  sd_break_notice_valid = FALSE;
@@ -1595,6 +1596,7 @@ void  cu_spisd_cs_set(boole ena, auint cycle)
   sd_state.enac = cycle;
   if (sd_state.ena == FALSE){ /* Kill any command if CS goes away */
    sd_state.cmd &= SCMD_A;    /* (Except for the app. command flag which indicates waiting for such a command) */
+   cu_sdb_write_abort();      /* Any block in flight goes unprogrammed */
   }
 #ifdef ENABLE_SD_TRACE
   if (sd_debug_active){
@@ -1642,10 +1644,14 @@ void  cu_spisd_send(auint data, auint cycle)
     if ((0xFFFFFFFFU - read_wait) < fault_extra){ read_wait = 0xFFFFFFFFU; }else{ read_wait += fault_extra; }
 #endif
     if (sd_state.ppos >= read_wait){
-     sd_state.data  = 0xFEU; /* Read data token */
-     sd_state.pstat = PSTAT_RDATA;
-     sd_state.ppos  = 0U;
-     sd_state.cc16v = 0x0000U;
+     sd_state.data  = cu_sdb_read_begin(sd_state.paddr);
+     if (sd_state.data == 0xFEU){ /* Read data token */
+      sd_state.pstat = PSTAT_RDATA;
+      sd_state.ppos  = 0U;
+      sd_state.cc16v = 0x0000U;
+     }else{                  /* Error token: no data phase follows it */
+      sd_state.pstat = PSTAT_IDLE;
+     }
 #ifdef ENABLE_SD_FAULT
      if (fault_extra != 0U){ cu_spisd_fault_fire(CU_SPISD_FAULT_TOKEN_DELAY, fault_cmd, sd_state.paddr, TRUE, cycle); }
 #endif
@@ -1656,7 +1662,7 @@ void  cu_spisd_send(auint data, auint cycle)
    break;
 
   case PSTAT_RDATA:     /* Read data bytes (512) */
-   sd_state.data  = cu_vfat_read((sd_state.paddr << 9) + sd_state.ppos);
+   sd_state.data  = cu_sdb_read((sd_state.paddr << 9) + sd_state.ppos);
    sd_state.cc16v = cu_spisd_crc16_byte(sd_state.cc16v, sd_state.data);
    sd_state.ppos  ++;
    if (sd_state.ppos == 512U){
@@ -1698,7 +1704,7 @@ void  cu_spisd_send(auint data, auint cycle)
    break;
 
   case PSTAT_W24DATA:   /* CMD24 Write accept data (512) */
-   cu_vfat_write((sd_state.paddr << 9) + sd_state.ppos, data);
+   cu_sdb_write((sd_state.paddr << 9) + sd_state.ppos, data);
    sd_state.cc16v = cu_spisd_crc16_byte(sd_state.cc16v, data);
    sd_state.ppos  ++;
    if (sd_state.ppos == 512U){
@@ -1724,18 +1730,18 @@ void  cu_spisd_send(auint data, auint cycle)
 #endif
      sd_state.next  = WRAP32(cycle + (busy_ms * SPI_1MS));
     }
-    if ((sd_state.crc) && (sd_state.cc16c != sd_state.cc16v)){
-     /* Note: Actual rejection is not implemented (data is still written) */
-     sd_state.data  = 0x0BU; /* Data response token: Rejected due to CRC. */
-    }else{
-     sd_state.data  = 0x05U; /* Data response token: Accepted. */
-    }
+    {
+     /* The backend closes the block: accepted (0x05), rejected on CRC (0x0B),
+     ** or write error (0x0D). The legacy one stores a rejected block anyway */
+     boole crcok = ((!sd_state.crc) || (sd_state.cc16c == sd_state.cc16v));
 #ifdef ENABLE_SD_FAULT
-    if (sd_fault_any && (cu_spisd_fault_sum(CU_SPISD_FAULT_DATA_CRC, 24U, sd_state.paddr, TRUE) != 0U)){
-     sd_state.data = 0x0BU;
-     cu_spisd_fault_fire(CU_SPISD_FAULT_DATA_CRC, 24U, sd_state.paddr, TRUE, cycle);
-    }
+     if (sd_fault_any && (cu_spisd_fault_sum(CU_SPISD_FAULT_DATA_CRC, 24U, sd_state.paddr, TRUE) != 0U)){
+      crcok = FALSE;
+      cu_spisd_fault_fire(CU_SPISD_FAULT_DATA_CRC, 24U, sd_state.paddr, TRUE, cycle);
+     }
 #endif
+     sd_state.data  = cu_sdb_write_end(crcok);
+    }
    }
    sd_state.ppos  ++;
    write = TRUE;
@@ -1767,7 +1773,7 @@ void  cu_spisd_send(auint data, auint cycle)
    break;
 
   case PSTAT_W25DATA:   /* CMD25 Write accept data (512) */
-   cu_vfat_write((sd_state.paddr << 9) + sd_state.ppos, data);
+   cu_sdb_write((sd_state.paddr << 9) + sd_state.ppos, data);
    sd_state.cc16v = cu_spisd_crc16_byte(sd_state.cc16v, data);
    sd_state.ppos  ++;
    if (sd_state.ppos == 512U){
@@ -1785,18 +1791,19 @@ void  cu_spisd_send(auint data, auint cycle)
     sd_state.cc16c |= data;
     sd_state.pstat = PSTAT_W25PREP;
     sd_state.ppos  = 0U;    /* Skip being busy here */
-    if ((sd_state.crc) && (sd_state.cc16c != sd_state.cc16v)){
-     /* Note: Actual rejection is not implemented (data is still written) */
-     sd_state.data  = 0x0BU; /* Data response token: Rejected due to CRC. */
-    }else{
-     sd_state.data  = 0x05U; /* Data response token: Accepted. */
-    }
+    {
+     /* The backend closes the block: accepted (0x05), rejected on CRC (0x0B),
+     ** or write error (0x0D). The legacy one stores a rejected block anyway */
+     boole crcok = ((!sd_state.crc) || (sd_state.cc16c == sd_state.cc16v));
 #ifdef ENABLE_SD_FAULT
-    if (sd_fault_any && (cu_spisd_fault_sum(CU_SPISD_FAULT_DATA_CRC, 25U, sd_state.paddr, TRUE) != 0U)){
-     sd_state.data = 0x0BU;
-     cu_spisd_fault_fire(CU_SPISD_FAULT_DATA_CRC, 25U, sd_state.paddr, TRUE, cycle);
-    }
+     if (sd_fault_any && (cu_spisd_fault_sum(CU_SPISD_FAULT_DATA_CRC, 25U, sd_state.paddr, TRUE) != 0U)){
+      crcok = FALSE;
+      cu_spisd_fault_fire(CU_SPISD_FAULT_DATA_CRC, 25U, sd_state.paddr, TRUE, cycle);
+     }
 #endif
+     sd_state.data  = cu_sdb_write_end(crcok);
+     sd_state.paddr = (sd_state.paddr + 1U) & 0x007FFFFFU; /* Next block of the burst */
+    }
    }
    write = TRUE;
    break;

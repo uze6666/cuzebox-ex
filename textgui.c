@@ -30,6 +30,7 @@
 #include "textgui.h"
 #include "guicore.h"
 #include "conout.h"
+#include "cu_gdb.h" /* Compiles away to nothing without CU_GDB */
 #include "chars.h"
 
 #include <stdarg.h>
@@ -686,7 +687,7 @@ void textgui_draw(boole nohud, boole noovr)
  auint          t;
  textgui_rs_t   rs;
  textgui_rs_t   rsnoprn;
- boole          prmsg = (textgui_tim == 0U);
+ boole          prmsg = (!cu_gdb_isenabled()) && (textgui_tim == 0U); /* (the stub keeps the window title) */
 
  /* Prepare */
 

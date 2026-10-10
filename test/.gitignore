@@ -1,0 +1,9 @@
+# What running the tests leaves behind
+gdb/last_run.log
+gdb/fixtures/probe.o
+gdb/fixtures/probe.elf
+__pycache__/
+roms/coderom.bin
+roms/eeprom.bin
+roms/config.cfg
+roms/uzedisk/

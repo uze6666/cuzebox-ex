@@ -297,6 +297,7 @@ st_tail:
    UPDATE_HARDWARE;
    UPDATE_HARDWARE_IT;
    if (tmp >= 0x0100U){
+    CU_GDB_WATCH_W(tmp);
     CU_AVR_SRAM_WRITE(tmp, cpu_state.iors[arg1]);
    }else{
     cu_avr_write_io(tmp, cpu_state.iors[arg1]);
@@ -332,6 +333,7 @@ st_tail:
 ld_tail:
    UPDATE_HARDWARE;
    if (tmp >= 0x0100U){
+    CU_GDB_WATCH_R(tmp);
     cpu_state.iors[arg1] = CU_AVR_SRAM_READ(tmp);
    }else{
     cpu_state.iors[arg1] = cu_avr_read_io(tmp);

@@ -68,6 +68,19 @@ ifeq ($(FLAG_SELFCONT), 0)
 OBJECTS += $(OBD)/cu_vfat.o
 OBJECTS += $(OBD)/cu_spisd.o
 OBJECTS += $(OBD)/filesys.o
+ifneq ($(ENABLE_VFAT2), 0)
+OBJECTS += $(OBD)/cu_sdb.o
+OBJECTS += $(OBD)/cu_vfat2.o
+OBJECTS += $(OBD)/cu_vfat2dir.o
+OBJECTS += $(OBD)/cu_vfat2hf.o
+endif
+endif
+ifneq ($(ENABLE_GDB), 0)
+OBJECTS += $(OBD)/cu_gdb.o
+OBJECTS += $(OBD)/cu_gdbmon.o
+OBJECTS += $(OBD)/cu_gdbbrk.o
+OBJECTS += $(OBD)/cu_gdbovl.o
+OBJECTS += $(OBD)/chars_big.o
 endif
 OBJECTS += $(OBD)/eepdump.o
 OBJECTS += $(OBD)/romdump.o
@@ -383,6 +396,33 @@ $(OBD)/cu_haptic.o: cu_haptic.c $(DEPS)
 
 $(OBD)/cu_vfat.o: cu_vfat.c $(DEPS)
 	$(CC) -c $< -o $@ $(CFSIZ)
+
+$(OBD)/cu_gdb.o: cu_gdb.c $(DEPS)
+	$(CC) -c $< -o $@ $(CFSIZ)
+
+$(OBD)/cu_gdbmon.o: cu_gdbmon.c $(DEPS)
+	$(CC) -c $< -o $@ $(CFSIZ)
+
+$(OBD)/cu_gdbbrk.o: cu_gdbbrk.c $(DEPS)
+	$(CC) -c $< -o $@ $(CFSPD)
+
+$(OBD)/cu_gdbovl.o: cu_gdbovl.c $(DEPS)
+	$(CC) -c $< -o $@ $(CFSIZ)
+
+$(OBD)/chars_big.o: chars_big.c $(DEPS)
+	$(CC) -c $< -o $@ $(CFSIZ)
+
+$(OBD)/cu_sdb.o: cu_sdb.c $(DEPS)
+	$(CC) -c $< -o $@ $(CFSPD)
+
+$(OBD)/cu_vfat2.o: cu_vfat2.c $(DEPS)
+	$(CC) -c $< -o $@ $(CFSPD)
+
+$(OBD)/cu_vfat2dir.o: cu_vfat2dir.c $(DEPS)
+	$(CC) -c $< -o $@ $(CFSPD)
+
+$(OBD)/cu_vfat2hf.o: cu_vfat2hf.c $(DEPS)
+	$(CC) -c $< -o $@ $(CFSPD)
 
 $(OBD)/filesys.o: filesys.c $(DEPS)
 	$(CC) -c $< -o $@ $(CFSPD)

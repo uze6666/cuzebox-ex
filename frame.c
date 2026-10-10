@@ -28,6 +28,7 @@
 
 
 #include "frame.h"
+#include "cu_gdb.h" /* Whose stop a CU_BREAK is; nothing without CU_GDB */
 #include "guicore.h"
 #include "filters.h"
 #include "textgui.h"
@@ -88,6 +89,16 @@ static auint  frame_break_addr = 0U;
 
 /* Previous state of frame merging */
 static boole  frame_pmerge = FALSE;
+
+/* The last frame_run() was halted (CU_BREAK) before its frame's end */
+static boole  frame_cut = FALSE;
+
+/* The rows the passes cut before this one made of the frame in hand. A frame is
+** MAX_ROWS rows at most, however many halts it took: counted from each halt, a
+** machine that gives no frame end (the first rows after a reset) ended its
+** frame a halt's worth of rows later than it does run freely, so an input
+** replay halted there ran an entry late from then on. */
+static auint  frame_rows_cut = 0U;
 
 
 /* Sync: Good signal marker */
@@ -445,6 +456,8 @@ auint frame_run(boole drop, boole merge)
  auint           col;
  boole           gonly = ((guicore_getflags() & GUICORE_GAMEONLY) != 0U);
  boole           use_classic = frame_use_classic_render();
+ uint32*         pixb = pix;   /* Before the one row shift below */
+ boole           clrd = drop;  /* A dropped frame renders nothing, so never clears */
  cu_row_t const* erowd;
  cu_frameinfo_t const* finfo;
 
@@ -452,17 +465,19 @@ auint frame_run(boole drop, boole merge)
   frame_prepare_classic_palette(pal_classic, pal);
  }
 
- /* Clear buffer. Maybe later will implement some more optimal solution here
- ** to avoid this full clear, but it is not known which lines the emulator
- ** would produce. */
-
- if (!drop){
-  if (!gonly){
-   frame_clear(pix, ptc,  0U,  0U, 640U, 280U, pal[0]);
-  }else{
-   frame_clear(pix, ptc, 10U, 18U, 620U, 230U, pal[0]);
-  }
- }
+ /* The buffer is cleared below, immediately before the first row of actual
+ ** picture is drawn, rather than here. Maybe later will implement some more
+ ** optimal solution than a full clear, but it is not known which lines the
+ ** emulator would produce.
+ **
+ ** Deferring it only matters when a call draws no picture at all, and under a
+ ** debugger that is the common case rather than a corner one: the CPU spends
+ ** the whole blanking interval in the game's own code, so that is where
+ ** breakpoints land and where a pause or a single step stops. Clearing on
+ ** entry wiped the finished frame those halts should be showing. Waiting
+ ** until there is a picture to replace it with keeps it on screen, while a
+ ** halt inside the video kernel still leaves the partial frame it had
+ ** rendered up to that scanline. */
 
  /* Shift whole display a little down to give more clearance to the text info
  ** on the top */
@@ -476,18 +491,26 @@ auint frame_run(boole drop, boole merge)
  frame_break_addr = 0U;
 #endif
  row = 0U;
+ if (!frame_cut){ frame_rows_cut = 0U; }
+ frame_cut = FALSE;
 
- while (row < MAX_ROWS){
+ while ((frame_rows_cut + row) < MAX_ROWS){
 
   ret = cu_avr_run();
 
-#ifdef ENABLE_DEBUGGER
   if ((ret & CU_BREAK) != 0U){
-   frame_break_hit = TRUE;
-   frame_break_addr = cu_avr_get_state()->pc & 0x7FFFU;
+   /* A halt before the frame's end: the next call goes on with this frame */
+   if ( ((ret & CU_GET_FRAME) == 0U) &&
+        ((frame_rows_cut + row) < MAX_ROWS) ){ frame_cut = TRUE; frame_rows_cut += row; }
+#ifdef ENABLE_DEBUGGER
+   if (!cu_gdb_ownsbreak()){   /* The GDB stub's stops are its own to report */
+    frame_break_hit = TRUE;
+    frame_break_addr = cu_avr_get_state()->pc & 0x7FFFU;
+    cu_gdb_foreignstop();      /* ...and this one is news to its client */
+   }
+#endif
    break;
   }
-#endif
 
   if ((ret & CU_GET_ROW) != 0U){
 
@@ -495,6 +518,15 @@ auint frame_run(boole drop, boole merge)
    frame_audio[row] = (uint8)(erowd->sample);
    if ( ((erowd->pno) >=  (RPULSE_START            )) &&
         ((erowd->pno) <   (RPULSE_START + RPULSE_NO)) ){
+
+    if (!clrd){
+     if (!gonly){
+      frame_clear(pixb, ptc,  0U,  0U, 640U, 280U, pal[0]);
+     }else{
+      frame_clear(pixb, ptc, 10U, 18U, 620U, 230U, pal[0]);
+     }
+     clrd = TRUE;
+    }
 
     if (!merge){
 
@@ -745,6 +777,29 @@ boole frame_breakpoint_hit(boole clear, auint* out_word_addr)
  return FALSE;
 #endif
 }
+
+
+/*
+** Whether the last frame_run() was halted before its frame's end, so the next
+** call goes on with that frame.
+*/
+boole frame_iscut(void)
+{
+ return frame_cut;
+}
+
+
+
+/*
+** The next frame_run() starts a frame whatever the last did (the emulator's
+** state was replaced by a frame's start).
+*/
+void  frame_setnew(void)
+{
+ frame_cut = FALSE;
+ frame_rows_cut = 0U;
+}
+
 
 
 /*

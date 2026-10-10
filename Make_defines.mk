@@ -456,6 +456,30 @@ ifneq ($(FLAG_GUI_VKEYBOARD),0)
 CFLAGS+= -DENABLE_GUI_VKEYBOARD=1
 endif
 CFLAGS+= -DFLAG_GUI_VKEYBOARD_DEFAULT=$(FLAG_GUI_VKEYBOARD_DEFAULT)
+#
+# The GDB remote stub (--gdb) and the host directory SD card (--sdhost). Both
+# are off until asked for on the command line; neither is in the Emscripten
+# build, and the card is not in a self-contained one.
+#
+ENABLE_GDB=$(FLAG_GDB)
+ENABLE_VFAT2=$(FLAG_VFAT2)
+ifeq ($(TSYS),emscripten)
+ENABLE_GDB=0
+ENABLE_VFAT2=0
+endif
+ifneq ($(FLAG_SELFCONT),0)
+ENABLE_VFAT2=0
+endif
+ifneq ($(ENABLE_GDB),0)
+CFLAGS+= -DCU_GDB=1
+endif
+ifneq ($(ENABLE_VFAT2),0)
+CFLAGS+= -DCU_VFAT2=1
+ifneq ($(FLAG_VFAT2_ON),0)
+CFLAGS+= -DCU_VFAT2_ON=1
+endif
+CFLAGS+= -DCU_VFAT2_DIR="\"$(FLAG_VFAT2_DIR)\""
+endif
 ifneq ($(ENABLE_DEBUGGER),0)
 CFLAGS+= -DENABLE_DEBUGGER=1
 ifneq ($(ENABLE_MEMORY_TRACE),0)

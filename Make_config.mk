@@ -239,6 +239,24 @@ FLAG_SD_REPLAY=$(FLAG_DEBUGGER)
 FLAG_AUDIO_TRACE=$(FLAG_DEBUGGER)
 
 #
+# Build the GDB remote stub: avr-gdb, or an IDE through it, attaches with
+# "target remote :1234" to an emulator started with --gdb. It lives beside the
+# debugger above and needs none of it; without --gdb it costs one test per
+# instruction. See doc/notes-gdbstub.md.
+#
+FLAG_GDB=1
+#
+# Build the host directory SD card: with --sdhost the card is a folder beside
+# the game (FLAG_VFAT2_DIR) with full FAT16 semantics, so what the ROM
+# creates, writes, renames and deletes happens to the PC's files. Without
+# --sdhost the card is the virtual FAT16 volume as ever. FLAG_VFAT2_ON=1 makes
+# --sdhost the default (--no-sdhost then turns it off).
+# See doc/spec-sd-enhanced-vfat.md.
+#
+FLAG_VFAT2=1
+FLAG_VFAT2_ON=0
+FLAG_VFAT2_DIR=uzedisk
+#
 # Build the localhost automation API server. This is temporary default-on for
 # development and should be switched off before release builds.
 #

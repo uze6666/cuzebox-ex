@@ -175,6 +175,7 @@ const auint cu_kbd_scan_codes[][2] = {
  {0x73,SDLK_KP_5},
  {0x74,SDLK_KP_6},
  {0x75,SDLK_KP_8},
+ {0x76,SDLK_ESCAPE},	/* was missing, so ESC never reached a dongle ROM */
  {0x79,SDLK_KP_PLUS},
  {0x7a,SDLK_KP_3},
  {0x7b,SDLK_KP_MINUS},
@@ -186,7 +187,7 @@ const auint cu_kbd_scan_codes[][2] = {
 const auint cu_kbd_ext_codes[][2] = {
  {0x69,SDLK_END},
  {0x6b,SDLK_LEFT},
- {0x6b,SDLK_HOME},
+ {0x6c,SDLK_HOME},	/* was 0x6b, Left's code, so Home arrived as Left */
  {0x70,SDLK_INSERT},
  {0x71,SDLK_DELETE},
  {0x72,SDLK_DOWN},
@@ -195,7 +196,9 @@ const auint cu_kbd_ext_codes[][2] = {
  {0x7a,SDLK_PAGEDOWN},
  {0x7c,SDLK_PRINTSCREEN},//SDLK_PRINT
  {0x7d,SDLK_PAGEUP},
- {0x7e,SDLK_STOP},//SDLK_BREAK
+ /* 0x7e, Ctrl+Break, is not here: it needs the Ctrl state, so it is handled as a
+ ** special case in cu_kbd_queue_route_event(). It was {0x7e,SDLK_STOP} -- a
+ ** multimedia "Stop" key no PC keyboard produces -- so Break never reached a ROM. */
  {0,0}
 };
 
@@ -357,12 +360,19 @@ static void cu_kbd_queue_route_event(SDL_Event const* ev)
 		return;
 	}
 
-	if (ev->type == SDL_KEYUP){
-		for (port = 0U; port < CU_KBD_PORTS; ++port){
-			if (!route_port[port]){ continue; }
-			(void)cu_kbd_queue_push_or_hook(port, 0xF0U);
-		}
+	/* Ctrl state, tracked here rather than at the bottom of this function: Left
+	** Ctrl is in cu_kbd_scan_codes, so the tracking down there sits after an early
+	** return and never runs, and the Ctrl+F1 and Ctrl+F6 shortcuts it guards could
+	** never fire. */
+	if ((ev->key.keysym.sym == SDLK_LCTRL) || (ev->key.keysym.sym == SDLK_RCTRL)){
+		cu_kbd_held_lctrl = (ev->type == SDL_KEYDOWN) ? 1U : 0U;
 	}
+
+	/* The 0xF0 break prefix is sent next to the scancode it belongs to, not before
+	** the lookup that decides whether there is one. Sent first, a key with no
+	** scancode at all (any F key) left a dangling prefix in the queue, and the ROM
+	** then read it as the break of whatever was typed next: the following
+	** character disappeared. */
 
 	i = 0U;
 	while (cu_kbd_scan_codes[i][1] && (cu_kbd_scan_codes[i][1] != (auint)ev->key.keysym.sym)){
@@ -371,6 +381,7 @@ static void cu_kbd_queue_route_event(SDL_Event const* ev)
 	if (cu_kbd_scan_codes[i][1] == (auint)ev->key.keysym.sym){
 		for (port = 0U; port < CU_KBD_PORTS; ++port){
 			if (!route_port[port]){ continue; }
+			if (ev->type == SDL_KEYUP){ (void)cu_kbd_queue_push_or_hook(port, 0xF0U); }
 			(void)cu_kbd_queue_push_or_hook(port, (uint8)(cu_kbd_scan_codes[i][0] & 0xFFU));
 		}
 		cu_kbd_sync_legacy_queue();
@@ -384,8 +395,31 @@ static void cu_kbd_queue_route_event(SDL_Event const* ev)
 	if (cu_kbd_ext_codes[i][1] == (auint)ev->key.keysym.sym){
 		for (port = 0U; port < CU_KBD_PORTS; ++port){
 			if (!route_port[port]){ continue; }
+			if (ev->type == SDL_KEYUP){ (void)cu_kbd_queue_push_or_hook(port, 0xF0U); }
 			(void)cu_kbd_queue_push_or_hook(port, 0xE0U);
 			(void)cu_kbd_queue_push_or_hook(port, (uint8)(cu_kbd_ext_codes[i][0] & 0xFFU));
+		}
+		cu_kbd_sync_legacy_queue();
+		return;
+	}
+
+	/* Ctrl+Pause is Break, and a set 2 keyboard sends E0 7E for it. Plain Pause is
+	** the E1 14 77 sequence instead, which no Uzebox ROM decodes, so it is left
+	** alone -- which is also why this cannot live in the table above: the same SDL
+	** key means two different things depending on Ctrl. The Ctrl state is the flag
+	** tracked above, not ev->key.keysym.mod: synthetic key events (the GDB stub's
+	** "monitor key") carry no modifier. Matched on the scancode as well, because
+	** Windows reports Ctrl+Pause as VK_CANCEL, which on some SDL versions arrives
+	** as SDL_SCANCODE_PAUSE with a keysym that is not SDLK_PAUSE. (Measured: a real
+	** Ctrl+Pause on Windows still never reaches the window through SDL; a real
+	** keyboard on the hardware sends E0 7E itself.) */
+	if ( ((ev->key.keysym.sym == SDLK_PAUSE) ||
+	      (ev->key.keysym.scancode == SDL_SCANCODE_PAUSE)) && cu_kbd_held_lctrl ){
+		for (port = 0U; port < CU_KBD_PORTS; ++port){
+			if (!route_port[port]){ continue; }
+			if (ev->type == SDL_KEYUP){ (void)cu_kbd_queue_push_or_hook(port, 0xF0U); }
+			(void)cu_kbd_queue_push_or_hook(port, 0xE0U);
+			(void)cu_kbd_queue_push_or_hook(port, 0x7EU);
 		}
 		cu_kbd_sync_legacy_queue();
 		return;

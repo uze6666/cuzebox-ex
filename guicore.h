@@ -61,6 +61,8 @@
 #define GUICORE_SMALL      0x0004U
 /* Display only the game region */
 #define GUICORE_GAMEONLY   0x0008U
+/* Create the window hidden (unattended scripted runs: --gdb-nolimit) */
+#define GUICORE_HIDDEN     0x0010U
 
 
 

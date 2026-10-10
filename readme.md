@@ -31,6 +31,8 @@ configuration, workflows, and implementation details beyond this quick guide.
 | Multiplayer gameplay | [Netplay](documentation/netplay.md) |
 | UART, serial links and MIDI | [Serial and endpoints](documentation/serial.md), [ESP emulation](documentation/esp8266-emulation.md) |
 | Display, sound and external memory | [Video filters](documentation/video-filters.md), [sound options](documentation/sound.md), [SPI RAM](documentation/spiram.md) |
+| GDB remote debugging and scripted runs | [GDB stub](documentation/gdb-stub.md) |
+| SD card as a host folder with full FAT semantics | [`--sdhost`](documentation/sd-host-directory.md) |
 | Cheats and saved settings | [Cheats](documentation/cheats.md), [preference persistence](documentation/preference-persistence.md) |
 
 The included `mkdocs.yml` also supports serving the documentation locally with MkDocs.
@@ -52,6 +54,8 @@ Availability depends on the selected build flags and platform.
 - Virtual SD storage backed by host files, including nested directories and
   controlled file/folder creation, resizing, renaming, and deletion.
   SD timing presets and custom timing values support compatibility testing.
+  With `--sdhost` the card is a host folder with full FAT16 semantics, for
+  software that mounts it with FatFs or UzeFS.
 - SPI RAM selected by a ROM-header hint or manual override, up to 8 MiB.
 - SNES pads, mouse/SuperMouse and lightgun-style devices, keyboard dongles,
   JAMMA display rotation, UzeTap slot selection, UzeBus traffic, and haptic routing.
@@ -94,6 +98,10 @@ Availability depends on the selected build flags and platform.
   cycle-correlated audio tracing.
 - Embedded localhost web pages for controls, debugging, SD tools, audio
   analysis, serial tools, and network diagnostics.
+- An optional GDB remote stub (`--gdb`): avr-gdb or an IDE attaches for
+  source-level debugging, and `monitor` commands type into the keyboard
+  dongle, press buttons, run exact frame counts and take screenshots. It
+  shares stops with the debugger above.
 - A TCP API for ROM loading, run control, state/memory inspection, debugging,
   peripheral configuration, and scripted regression tests. The
   [API command reference](documentation/api/commands.md) describes the full

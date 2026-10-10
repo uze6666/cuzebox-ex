@@ -35,6 +35,7 @@
 #include "cu_avrfg.h"
 #include "cu_ctr.h"
 #include "cu_spi.h"
+#include "cu_gdbbrk.h" /* GDB stub hooks; all of them compile away without CU_GDB */
 
 extern uint8 cu_kbd_enabled;
 extern auint cu_hap_process(auint prev, auint curr);
@@ -804,6 +805,7 @@ static void  cu_avr_write_io(auint port, auint val)
 #endif
 
  access_io[port] |= CU_MEM_W;
+ CU_GDB_WATCH_W(port);
 #ifdef ENABLE_DEBUGGER
  if (cu_debug_mem_active){ cu_avr_debug_mem_event(CU_AVR_WATCH_REGION_IO, CU_AVR_WATCH_WRITE, port & 0x00FFU, cval); }
 #endif
@@ -1191,8 +1193,12 @@ static void  cu_avr_write_io(auint port, auint val)
 
  case 0x39: /* Emulator-only, whisper logging */
    printf("%02x", cval);
+   break;       /* (fell through, so every hex byte was followed by its raw character) */
+
  case 0x3A: /* Purposely printf, so it works with -DHEADLESS=1 */
    printf("%c", cval);
+   fflush(stdout); /* So a script or an IDE terminal reading the pipe sees it at once */
+   break;
 
   default:
 
@@ -1240,6 +1246,7 @@ static auint cu_avr_read_io(auint port)
  auint ret = 0U;
 
  access_io[port] |= CU_MEM_R;
+ CU_GDB_WATCH_R(port);
 
  switch (port){
 
@@ -1572,6 +1579,9 @@ auint cu_avr_run(void)
  video_rowflag = FALSE;
 
  while (video_cycle < VIDEO_CY_MAX){ /* Also signals proper row end */
+  /* The GDB stub's breakpoints, steps and halts: one test while no client is
+  ** attached. It stops the same way the debugger below does, mid-scanline. */
+  if (CU_GDB_EXEC_HOOK(cpu_state.pc)){ return CU_BREAK; }
 #ifdef ENABLE_DEBUGGER
   auint curpc = cpu_state.pc & 0x7FFFU;
   if (temp_break_active && (curpc == temp_break_addr)){

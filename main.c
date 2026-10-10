@@ -65,6 +65,9 @@
 #include "eepdump.h"
 #include "romdump.h"
 #include "textgui.h"
+#include "cu_sdb.h" /* Reduces to the virtual FAT16 volume without CU_VFAT2 */
+#include "cu_gdb.h" /* The GDB stub: compiles away to nothing without CU_GDB */
+#include "cu_gdbmon.h" /* Likewise; for "monitor speed" and the screenshots' name */
 #include "configcfg.h"
 #include "mainui.h"
 #include "renderpath.h"
@@ -153,6 +156,10 @@ static auint main_t5_cc;
 
 /* Request for discarding frame limitation */
 static boole main_nolimit = FALSE;
+
+/* Window caption for the GDB stub's status (cu_gdbovl.c): the title plus the
+** loaded game's file name, so several emulator windows can be told apart. */
+char main_caption[160] = "CUzeBox";
 static boole main_fast_flash_active = FALSE;
 static auint main_fast_flash_present_tick;
 
@@ -925,6 +932,7 @@ static void main_cfg_apply_runtime(void)
 	if (!main_cfg.frame_rate_limiter){
 		flags |= GUICORE_NOVSYNC;
 	}
+	if (cu_gdb_starthidden()){ flags |= GUICORE_HIDDEN; } /* An unattended run stays unseen */
 	main_fmerge = (main_cfg.frame_merge && main_cfg_render_allows_frame_merge());
 	main_nolimit = (!main_cfg.frame_rate_limiter);
 	main_audio_freqscale = (main_cfg.audio_freqscale && main_cfg.frame_rate_limiter);
@@ -6387,6 +6395,9 @@ if (main_input_profile_dirty){ (void)mainui_input_profile_save_current(); }
 			return FALSE;
 		}
 	}
+	cu_sdb_setgame(path); /* The card follows the game to its directory */
+	cu_gdbmon_setgame(path);
+	snprintf(&(main_caption[0]), sizeof(main_caption), "%s - %s", main_title, main_path_basename(path));
 	memcpy(&(ecpu->crom[0]), &(new_crom[0]), sizeof(new_crom));
 	memcpy(&(ecpu->eepr[0]), &(new_eepr[0]), sizeof(new_eepr));
 	cu_avr_autofuse((boole)(bootpri || main_resident_bootloader_boot_priority(&(ecpu->crom[0]))));
@@ -6480,6 +6491,24 @@ static void main_fast_flash_tick(auint tick)
  main_fast_flash_active = active;
 }
 
+#ifdef CU_GDB
+/*
+** What has to go on living while a GDB client holds the CPU, when main_loop()
+** does not run: the API and web servers, so the web debugger and scripts can
+** look at the halted machine, and the serial link's keepalives.
+*/
+static void main_gdb_idle(void)
+{
+ api_server_tick();
+ web_server_set_api_port(api_server_get_port());
+#ifdef ENABLE_ESP
+ cu_esp_endpoint_host_tick();
+#endif
+}
+#endif
+
+
+
 /*
 ** Main loop body
 */
@@ -6500,6 +6529,23 @@ static void main_loop(void)
  SDL_Event sdlevent;
  cu_state_cpu_t* ecpu;
  textgui_struct_t* tgui;
+
+ /* Service the GDB stub. While a GDB client holds the CPU this does not
+ ** return, keeping the window, the audio and (main_gdb_idle()) the API and web
+ ** servers alive but running no emulation, so the emulated clock is frozen
+ ** for as long as the halt lasts. */
+
+ if (cu_gdb_hold()){ main_exit = TRUE; return; }
+
+ /* The client resumed from a stop the debugger here had made (its breakpoint
+ ** or step, which the client was shown as a halt): its pause goes with it */
+ if (cu_gdb_foreignresumed()){ mainui_debug_set_paused(FALSE); }
+
+ /* "monitor speed": the frame limiter, where F4 cannot reach (a dongle ROM
+ ** has the keyboard, or nobody is at it) */
+ if (cu_gdbmon_nolimit_sync(main_nolimit) != main_nolimit){
+  mainui_set_frame_rate_limiter(main_nolimit); /* (the limiter on is what "no limit" now is not) */
+ }
 
 #ifdef ENABLE_MICROUI
  if (netplay_is_connected() || mui_netplay_ui_active() || ((main_frc & 3U) == 0U)){
@@ -6605,6 +6651,8 @@ static void main_loop(void)
  }
  main_promch = romch;
 
+ cu_sdb_frametick(); /* Likewise lets the SD backend settle its host files */
+
  /* Generate various emulator info for the GUI */
 
  main_t500 += tdif;
@@ -6672,6 +6720,15 @@ static void main_loop(void)
 #endif
 
   if (sdlevent.type == SDL_QUIT){ main_exit = TRUE; }
+
+  /* Ctrl+Q force-quits even when a ROM has the keyboard dongle capturing all
+  ** input (below), so there is always a way out without first hunting for
+  ** Left Ctrl+F1. Not Ctrl+ESC: Windows keeps that for the Start menu. */
+  if ( ((sdlevent.type) == SDL_KEYDOWN) &&
+       ((sdlevent.key.keysym.sym) == SDLK_q) &&
+       (((sdlevent.key.keysym.mod) & KMOD_CTRL) != 0) ){
+   main_exit = TRUE;
+  }
 
   if(cu_kbd_capture_active()){ continue; }
   if(cu_kbd_bypassed == 255){ cu_kbd_bypassed = 1; continue; } /* incase it was just disabled in ginput_sendevent(), eat F1 keypress */
@@ -6810,7 +6867,10 @@ static void main_loop(void)
  if (!main_ispause){
 
 #ifdef ENABLE_ICAP
-  if (main_input_capture_active){
+  /* Once a frame: not again for a frame a debugger halted, which this pass
+  ** goes on with. Its inputs were taken already, and an entry of the capture
+  ** or of the replay spent on it again would shift every frame after it. */
+  if (main_input_capture_active && (!frame_iscut())){
 #ifndef ENABLE_IREP
    capture_inputs();
 #else
@@ -6987,6 +7047,16 @@ int main (int argc, char** argv)
  remote_roms_init();
  remote_roms_set_host(main_cfg.remote_roms_host[0] ? main_cfg.remote_roms_host : "uzenet.us");
 
+ argc = (int)(cu_gdb_parseargs(argc, argv)); /* Strips the --gdb* options */
+ argc = (int)(cu_sdb_parseargs(argc, argv)); /* Strips the --sdhost options */
+ cu_gdb_focus_capture(); /* Before guicore_init(), or it captures our own window */
+ if (cu_gdb_startnolimit()){ /* --gdb-nolimit: full speed from the first frame */
+  main_cfg.frame_rate_limiter = FALSE;
+  main_nolimit = TRUE;
+  main_audio_freqscale = FALSE;
+  audio_freqscale_ena(FALSE);
+ }
+
  if (argc > 1){
   strncpy(startup_game, argv[1], sizeof(startup_game) - 1U);
   startup_game[sizeof(startup_game) - 1U] = 0;
@@ -6998,6 +7068,11 @@ int main (int argc, char** argv)
  }
 
  filesys_setpath(&(startup_game[0]), &(tstr[0]), 100U); /* Locate everything beside the game */
+ cu_sdb_init(&(startup_game[0])); /* The SD card is built from there too */
+ cu_gdbmon_setgame(&(startup_game[0])); /* The screenshots' name */
+ if (startup_has_path){
+  snprintf(&(main_caption[0]), sizeof(main_caption), "%s - %s", main_title, main_path_basename(&(startup_game[0])));
+ }
 
  ecpu = cu_avr_get_state();
  if (startup_has_path){
@@ -7049,6 +7124,8 @@ int main (int argc, char** argv)
  if (!main_cfg.frame_rate_limiter){
   flg |= GUICORE_NOVSYNC;
  }
+ /* An unattended run (--gdb-nolimit without --gdb-show): unseen and unheard */
+ if (cu_gdb_starthidden()){ flg |= GUICORE_HIDDEN; }
 
  if (!guicore_init(flg, main_title)){
   netplay_shutdown();
@@ -7075,6 +7152,9 @@ int main (int argc, char** argv)
 
  cu_avr_autofuse((boole)(bootpri || main_resident_bootloader_boot_priority(&(ecpu->crom[0]))));
  cu_avr_reset();
+ cu_gdb_init();
+ cu_gdb_setidle(&main_gdb_idle);
+ if (cu_gdb_starthidden()){ audio_master_volume_set(0U); }
  main_netplay_runtime_reset();
  main_t5_cc = cu_avr_getcycle();
  audio_reset();
@@ -7114,6 +7194,10 @@ int main (int argc, char** argv)
   strncpy(main_loaded_rom_path, &(startup_game[0]), sizeof(main_loaded_rom_path) - 1U);
   main_loaded_rom_path[sizeof(main_loaded_rom_path) - 1U] = 0;
   main_apply_esp_softap_policy(FALSE, NULL);
+  /* A .hex given on the command line gets the SPI RAM a .hex loaded from the
+  ** menu does (it had none: only the menu's path and a .uze applied the size) */
+  main_apply_spiram_policy(FALSE, 0U);
+  cu_spir_reset(0U);
  }
  api_server_notify_rom_loaded();
 #ifdef ENABLE_DEBUGGER
@@ -7157,6 +7241,7 @@ if (main_input_profile_dirty){ (void)mainui_input_profile_save_current(); }
 #endif
  }
 
+ cu_gdb_quit();
  ginput_quit();
  audio_quit();
  web_server_shutdown();
