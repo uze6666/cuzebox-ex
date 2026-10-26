@@ -69,6 +69,9 @@ static void compare_after(auint clocks)
  cpu_state.iors[CU_IO_OCR1BL] = 0xFFU;
  cpu_state.iors[CU_IO_OCR1BH] = 0xFFU;
  timer1_base = cpu_state.cycle;
+#if FLAG_AVR_TIMER1_CLOCK
+ timer1_clock=(cu_timer1_clock_t){(uint32_t)cpu_state.cycle,(uint32_t)cpu_state.cycle,0U,1U,0U};
+#endif
  timer1_compare_blocked = FALSE;
  cu_avr_hwexec();
 }

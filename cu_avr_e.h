@@ -888,8 +888,7 @@ static void op_49(auint arg1, auint arg2) /* PIXEL */
 {
  /* Note: Normally should execute after UPDATE_HARDWARE, here it doesn't
  ** matter (just shifts visual output one cycle left) */
- cpu_state.iors[CU_IO_PORTC] = cpu_state.iors[arg2] &
-                               cpu_state.iors[CU_IO_DDRC];
+ CU_AVR_PIXEL_WRITE(cpu_state.iors[arg2]);
  cy1_tail();
 }
 

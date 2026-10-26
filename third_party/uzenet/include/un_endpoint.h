@@ -10,7 +10,11 @@ enum { UE_START=1, UE_POLL, UE_EXCHANGE, UE_CHAT_BEGIN, UE_CHAT_WRITE,
        UE_CHAT_READ, UE_CHAT_NEXT, UE_CHAT_STATUS, UE_CREDIT, UE_REPLAY_READ, UE_REPLAY_NEXT,
        UE_SERVICE_INFO, UE_DELAY_POLICY, UE_NET_STATUS, UE_PEER_STATUS,
        UE_NAME_SET, UE_NAME_GET, UE_CHECK, UE_CHECK_STATUS, UE_PROFILE_SET, UE_PROFILE_GET,
-       UE_BARRIER, UE_END };
+       UE_BARRIER, UE_END, UE_LOBBY, UE_SNAPSHOT, UE_JOIN, UE_SETTLE,
+       UE_NAME_FORMAT, UE_NAME_MAP, UE_DISPLAY_NAME, UE_COMPACT_STATUS,
+       UE_INPUT_SEND, UE_INPUT_READ, UE_LIVE, UE_LAST_FAILURE, UE_BURST, UE_BURST_ACK };
+enum { UE_BURST_REPLAY=1, UE_BURST_INPUT, UE_BURST_LIVE, UE_BURST_SNAPSHOT };
+#define UE_JOINING 8
 #define UE_OK 0x80
 #define UE_OOB 0x40
 #define UE_ERROR 0x10
@@ -20,16 +24,25 @@ enum { UE_START=1, UE_POLL, UE_EXCHANGE, UE_CHAT_BEGIN, UE_CHAT_WRITE,
 #define UE_DEFER 0x40
 enum { UE_BAD_REQUEST=1, UE_BAD_SEQUENCE, UE_NOT_READY, UE_BACKEND, UE_EXHAUSTED,
        UE_DESYNC, UE_NEGOTIATION, UE_METADATA, UE_ENDED, UE_SYNC_ERROR, UE_SESSION_TIMEOUT };
+enum { UE_ASCII=0, UE_UPPERCASE, UE_CUSTOM_MAP };
+enum { UE_STATUS_IDLE=0, UE_STATUS_CONNECTING, UE_STATUS_BINDING,
+       UE_STATUS_WAIT_PLAYERS, UE_STATUS_WAIT_READY, UE_STATUS_SYNC,
+       UE_STATUS_RUNNING, UE_STATUS_WAIT_INPUT, UE_STATUS_RECONNECTING,
+       UE_STATUS_ENDING, UE_STATUS_FAILED };
+/* Failure source: 0 none, 1 UrClient.error, 2 UrServices.failure,
+ * 3 desync (UE_DESYNC), 4 session end code. */
 typedef struct {
     uint8_t request[24],reply[24],request_n,reply_n,tag,valid;
     uint8_t configured,running,granted,sampled,defer,awaiting;
+    uint8_t input_stream,burst_count;
     uint32_t frame;
-    uint8_t delay,window,repair,baseline[8],used[UE_PREDICTION_SLOTS][8];
+    uint8_t delay,window,repair,baseline[UR_PAD_MAX],used[UE_PREDICTION_SLOTS][UR_PAD_MAX];
     uint8_t policy[4]; /* auto flag, minimum, maximum, milliseconds per tick */
     uint32_t repair_first,repair_cursor,repair_end;
     uint8_t chat_dest,chat_channel,chat_total,chat_writing;
     uint8_t read_peer,read_offset,read_count;
     uint32_t read_id;
+    uint8_t name_mode,name_fallback,name_map[95];
     uint8_t name_read[US_NAME_MAX],name_seat,name_length,name_valid;
 } UnEndpoint;
 void ue_reset(UnEndpoint *e);

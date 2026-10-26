@@ -1,4 +1,5 @@
 #include "savestate.h"
+#include "cu_hw_features.h"
 #include "diagnostics.h"
 #ifdef ENABLE_ICAP
 #include "capture.h"
@@ -87,6 +88,10 @@ typedef struct{
  uint32 compare_blocked;
 } savestate_timer1_t;
 #define SAVESTATE_TIMER1_MAGIC 0x435a5431UL /* CZT1 */
+typedef struct{
+ uint32 magic,size,features,phase,drive_mask,drive_value;
+} savestate_hardware_t;
+#define SAVESTATE_HARDWARE_MAGIC 0x435a4831UL /* CZH1 */
 
 #define SAVESTATE_MAGIC	0x435a5356UL	/* CZSV */
 #define SAVESTATE_VERSION	1UL
@@ -314,6 +319,7 @@ static boole savestate_build_blob(savestate_blob_t *blob)
 	cu_state_vdev_t vdev;
 	savestate_input_hdr_t input_hdr;
 	savestate_timer1_t timer1;
+	savestate_hardware_t hardware;
 	uint8 *dst;
 	auint total_size;
 
@@ -364,6 +370,8 @@ static boole savestate_build_blob(savestate_blob_t *blob)
 	timer1.magic = SAVESTATE_TIMER1_MAGIC;
 	timer1.size = sizeof(timer1);
 	timer1.compare_blocked = cu_avr_timer1_compare_blocked() ? 1U : 0U;
+	hardware.magic=SAVESTATE_HARDWARE_MAGIC;hardware.size=sizeof(hardware);hardware.features=CU_HW_FEATURES;
+	cu_avr_hardware_state(&hardware.phase,&hardware.drive_mask,&hardware.drive_value);
 
 	total_size = (auint)sizeof(hdr) +
 			 (auint)hdr.cpu_size +
@@ -372,7 +380,7 @@ static boole savestate_build_blob(savestate_blob_t *blob)
 			 (auint)hdr.spisd_size +
 			 (auint)hdr.vfat_size +
 			 (auint)hdr.esp_size +
-			 (auint)input_hdr.size + (auint)sizeof(timer1);
+			 (auint)input_hdr.size + (auint)sizeof(timer1) + (CU_HW_FEATURES?(auint)sizeof(hardware):0U);
 
 	savestate_free_blob(blob);
 	blob->data = (uint8*)malloc(total_size);
@@ -417,6 +425,7 @@ static boole savestate_build_blob(savestate_blob_t *blob)
 	memcpy(dst, &vdev, sizeof(vdev));
 	dst += sizeof(vdev);
 	memcpy(dst, &timer1, sizeof(timer1));
+	if(CU_HW_FEATURES){dst+=sizeof(timer1);memcpy(dst,&hardware,sizeof(hardware));}
 
 	return TRUE;
 }
@@ -476,15 +485,28 @@ boole savestate_validate_blob(savestate_blob_t const *blob)
      in.ctr_size!=sizeof(cu_state_ctr_t) || in.kbd_size!=sizeof(cu_state_kbd_t) ||
      in.gun_size!=sizeof(cu_state_gun_t) || in.vdev_size!=sizeof(cu_state_vdev_t) ||
      in.size!=sizeof(in)+in.multitap_size+in.ctr_size+in.kbd_size+in.gun_size+in.vdev_size ||
-     (uint64_t)base+in.size+sizeof(timer1)!=blob->size){ return FALSE; }
+     (uint64_t)base+in.size+sizeof(timer1)+(CU_HW_FEATURES?sizeof(savestate_hardware_t):0U)!=blob->size){ return FALSE; }
  memcpy(&timer1, blob->data + base + in.size, sizeof(timer1));
  if (timer1.magic != SAVESTATE_TIMER1_MAGIC || timer1.size != sizeof(timer1) ||
      timer1.compare_blocked > 1U){ return FALSE; }
+ if(CU_HW_FEATURES){
+  savestate_hardware_t hardware;
+  memcpy(&hardware,blob->data+base+in.size+sizeof(timer1),sizeof(hardware));
+  if(hardware.magic!=SAVESTATE_HARDWARE_MAGIC||hardware.size!=sizeof(hardware)||
+     hardware.features!=CU_HW_FEATURES||hardware.phase>=1024U)return FALSE;
+ }
  return TRUE;
 }
 
 static boole savestate_restore_impl(savestate_blob_t const *blob, boole preserve_movie)
 {
+	/* Reject a different compiled hardware model before mutating machine state. */
+	if(blob && blob->data && blob->size>=sizeof(savestate_hardware_t)){
+	 savestate_hardware_t hardware;
+	 memcpy(&hardware,blob->data+blob->size-sizeof(hardware),sizeof(hardware));
+	 if(hardware.magic==SAVESTATE_HARDWARE_MAGIC && (hardware.size!=sizeof(hardware)||
+	    hardware.features!=CU_HW_FEATURES||hardware.phase>=1024U))return FALSE;
+	}
 	savestate_hdr_t hdr;
 	savestate_spir_meta_t spir_meta;
 	savestate_input_hdr_t input_hdr;
@@ -609,7 +631,16 @@ static boole savestate_restore_impl(savestate_blob_t const *blob, boole preserve
 		memcpy(&timer1, src, sizeof(timer1));
 		if (timer1.magic == SAVESTATE_TIMER1_MAGIC && timer1.size == sizeof(timer1) && timer1.compare_blocked <= 1U){
 			cu_avr_timer1_restore_compare_block(timer1.compare_blocked ? TRUE : FALSE);
+			src+=sizeof(timer1);
 		}
+	}
+	remaining=(auint)(blob->data+blob->size-src);
+	cu_avr_hardware_restore(0U,0U,0U);
+	if(remaining>=sizeof(savestate_hardware_t)){
+	 savestate_hardware_t hardware;memcpy(&hardware,src,sizeof(hardware));
+	 if(hardware.magic==SAVESTATE_HARDWARE_MAGIC && hardware.size==sizeof(hardware)&&
+	    hardware.features==CU_HW_FEATURES&&hardware.phase<1024U)
+	  cu_avr_hardware_restore(hardware.phase,hardware.drive_mask,hardware.drive_value);
 	}
 
 	return TRUE;

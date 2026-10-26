@@ -33,7 +33,8 @@
 #define CAPTURE_H
 
 /* Bump when core semantics can change deterministic execution. Not an ABI. */
-#define CAPTURE_BEHAVIOR_ID 0x20261015U
+#include "cu_hw_features.h"
+#define CAPTURE_BEHAVIOR_ID (0x20261015U ^ (CU_HW_FEATURES << 24))
 
 
 

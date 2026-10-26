@@ -84,6 +84,7 @@ int up_receive(UrClient *c,unsigned peer,uint8_t mask,int response,
     return 1;
 }
 int up_next(UrClient *c,uint32_t now,uint8_t packet[48],uint8_t destination[6]){
+    if(c->protocol==UR_PROFILE_LOBBY || (c->protocol==UR_PROFILE_READYSTART && c->lobby.phase!=2))return 0;
     UrPace *p=&c->pace;
     if(!p->active || c->state!=UC_READY || now-p->last_tx<5)return 0;
     uint8_t covered=c->history.local;

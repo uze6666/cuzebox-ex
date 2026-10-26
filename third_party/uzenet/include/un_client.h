@@ -12,7 +12,36 @@ typedef struct {
     uint32_t seq,token,probe_at,send_at,last_ok,reply_token,generation;
     UrLink link;
 } UrPeer;
+/* First failure since explicit clear. stage is the pre-failure UC_* state;
+ * source: 1 client, 2 services, 3 checksum, 4 abnormal end, 5 endpoint, 6 UART I/O (reason 1).
+ * peers uses global seat bits, zero when the source cannot identify a peer. */
+typedef struct {uint8_t source,reason,stage,peers;} UrFailure;
+
 typedef struct UrClient {
+    UrFailure failure;
+    struct {
+        uint32_t sequence[64],next;
+        uint8_t value[64][4],out[5],pending,scan;
+        uint16_t unread[4];
+    } live;
+    struct {
+        uint8_t data[1536],want,ready,reset,primed;
+        uint16_t used,total,sent,received;
+        uint32_t base,polled;
+    } join;
+    struct {
+        uint8_t data[13][14],scan;
+        uint16_t valid,dirty,unread,epoch;
+        /* Replaceable race state is independent of reliable OOB. Each car
+         * retains just its newest state and the peers still needing it. */
+        uint32_t sequence,received[4],sent_at[4];
+        uint8_t pending[4],stream_scan,read_scan;
+    } snapshots;
+    struct {
+        uint8_t active,pending,phase,ready,action,waiting,error,host;
+        uint16_t epoch,expected;
+        uint32_t request,ack,sent,roster_seq;
+    } lobby;
     UrHistory history;
     UrPace pace;
     UrOob oob;
@@ -31,7 +60,9 @@ typedef struct UrClient {
     UrLink relay;
     uint16_t tx_errors,retries;
 } UrClient;
-void uc_reset(UrClient *c);
+void uc_reset(UrClient *c); /* cold initialization: clears diagnostics too */
+void uc_restart(UrClient *c); /* initialized clients only: retain failure */
+void uc_note_failure(UrClient *c,uint8_t source,uint8_t reason,uint8_t peers);
 int uc_begin(UrClient *c,const uint8_t config[19],const uint8_t nonce[4],uint32_t now,uint8_t request[25]);
 int uc_ticket(UrClient *c,const uint8_t ticket[68],uint32_t now);
 int uc_receive(UrClient *c,const uint8_t *packet,size_t length,uint32_t now);
@@ -49,6 +80,7 @@ void uc_rtt(UrLink *link,uint32_t elapsed);
 /* Transport-independent peer path: endpoints are IPv4[4], little-endian port16.
  * No key, endpoint, or Internet packet crosses the AVR interface. */
 int ud_offer(UrClient *c,const uint8_t ticket[68],uint32_t now);
+void ud_reset_peer(UrClient *c,unsigned peer);
 int ud_receive(UrClient *c,const uint8_t *packet,size_t length,const uint8_t source[6],uint32_t now);
 uint8_t ud_mask(const UrClient *c,uint32_t now);
 int ud_next(UrClient *c,unsigned peer,uint32_t now,uint8_t packet[48],uint8_t destination[6]);

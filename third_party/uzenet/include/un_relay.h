@@ -6,15 +6,44 @@
 #define UR_PACKET 48
 #define UR_BODY 32
 #define UR_REDUNDANT 0x80 /* CONFIG width flag; all room peers opt in */
+#define UR_LOBBY 0x20 /* Opt-in owner-snapshot lobby; one human per console. */
+#define UR_PROFILE_LOBBY 8
+#define UR_DROPIN 0x10 /* Lockstep with a frozen host state hand-off. */
+#define UR_PROFILE_DROPIN 9
+/* Two- and four-seat drop-in select 1..4 input bytes per seat. Four seats
+ * additionally opt into repeated admissions; the original wire format stays. */
+#define UR_DROPIN_CONFIG(c) ((c)[16]==1 && ((c)[17]==2 || (c)[17]==4) && \
+    ((c)[18]&UR_WIDTH_FLAGS)==UR_DROPIN && ((c)[18]&15)>=1 && ((c)[18]&15)<=4)
+#define UR_READYSTART (UR_LOBBY|UR_DROPIN) /* Initial ready lobby, then frozen lockstep. */
+#define UR_PROFILE_READYSTART 10
+#define UR_PROFILE_LIVE 11
+#define UR_IS_LIVE(flags) ((flags)==(UR_LOBBY|2))
+#define UR_IS_READYSTART(flags) (((flags)&UR_READYSTART)==UR_READYSTART)
+#define UR_ADMIT 14
+#define UR_LOBBY_REQUEST 13
+#define UR_ROSTER 0x8c
+#define UR_WIDTH_FLAGS (UR_REDUNDANT|UR_LOBBY|UR_DROPIN)
 #define UR_SAMPLES 4
 #define UR_PACKET_MAX (UR_PACKET + 8 * (UR_SAMPLES - 1))
-#define UR_SIZE(p) (UR_PACKET + 8u * ((p)[23] >> 6))
+/* Preserve the two-byte seat stride for existing games. Wide inputs use
+ * four-byte seats only in input/frame datagrams; control/OOB stay unchanged. */
+#define UR_PAD_MAX 16
+#define UR_STRIDE(w) (((w)&63)>2 ? 4u : 2u)
+#define UR_PAD_BYTES(w) (4u * UR_STRIDE(w))
+#define UR_IS_INPUT(t) ((t)==UR_INPUT || (t)==UR_INPUT_DIRECT || (t)==UR_FRAME || (t)==UD_INPUT)
+#define UR_PAYLOAD(t,w) ((UR_IS_INPUT(t) ? UR_PAD_BYTES(w) : 8u) * (1u+((w)>>6)))
+#define UR_SIZE(p) (40u + UR_PAYLOAD((p)[4],(p)[23]))
 #define UR_TICKET 68
 #define UR_CONFIG 19
 #define UR_REQUEST 25
 #define UR_OPEN 0x79
 #define UR_CLOSE 0x7a
 #define UR_PEER_INFO 0x7b
+#define UR_BOT_LIST 0x7c /* Pinned server bot identities only; no public discovery. */
+#define UR_BOT_OPEN 0x7d /* match[8], then the normal 25-byte OPEN request. */
+#define UR_BOT_LIST_MAX 32
+#define UR_BOT_LIST_HEADER 8
+#define UR_BOT_LIST_RECORD 30
 #define UR_INPUT_DIRECT 8
 #define UD_PUNCH 0x40
 #define UD_PONG 0x41
@@ -38,13 +67,14 @@
 enum {UR_HELLO=1,UR_CONFIRM,UR_INPUT,UR_FETCH,UR_RELEASE,UR_PING,UR_LEAVE,
       UR_CHALLENGE=0x81,UR_BOUND,UR_READY,UR_FRAME,UR_ERROR,UR_END,UR_RELEASED};
 typedef struct {uint32_t high;uint64_t bits;} UrReplay;
-typedef struct {uint32_t frame,sent;uint8_t pads[8],mask,valid,pending,transmitted;} UrFrame;
+typedef struct {uint32_t frame,sent;uint8_t pads[UR_PAD_MAX],mask,valid,pending,transmitted;} UrFrame;
 typedef struct {UrFrame frames[UR_WINDOW];uint32_t floor;uint8_t all,local,width;} UrHistory;
 uint32_t ur_get32(const uint8_t *p);
 void ur_put32(uint8_t *p,uint32_t n);
 /* Implement with the platform crypto library. Domain 0=C->S, 1=S->C. */
 int ur_mac(const uint8_t key[32],uint8_t domain,const uint8_t *body,size_t n,uint8_t tag[16]);
-/* Output needs UR_SIZE bytes; pads has 8*(1+(width>>6)) bytes. */
+/* Output needs UR_SIZE bytes. Input pads use UR_PAD_BYTES(width) per
+ * sample; control/OOB pads retain eight bytes per encoded sample. */
 int ur_seal(uint8_t *p,const uint8_t key[32],uint8_t domain,
             const uint8_t match[8],uint8_t peer,uint8_t type,uint32_t seq,
             uint32_t frame,uint8_t mask,uint8_t width,const uint8_t pads[8]);

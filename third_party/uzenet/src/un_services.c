@@ -1,6 +1,7 @@
 #include "un_client.h"
 #include <string.h>
 enum {US_HELLO=1,US_OFFER,US_NAME,US_CHECK,US_BARRIER,US_END};
+static void failure(UrClient *c,uint8_t reason){uc_note_failure(c,2,reason,0);c->services.failure=reason;}
 __attribute__((weak)) int us_profile_read(uint8_t local,uint8_t text[US_NAME_MAX]){
     (void)local;(void)text;return -1;
 }
@@ -33,7 +34,7 @@ void us_begin(UrClient *c,const uint8_t policy[4],uint8_t delay,uint8_t window,u
     unsigned local=0;
     for(unsigned seat=0;seat<4;seat++)if(c->history.local&(1u<<seat)){
         int n=us_profile_read(local++,s->names[seat]);
-        if(n==-2){s->failure=8;return;}
+        if(n==-2){failure(c,8);return;}
         if(n<0 || n>US_NAME_MAX || !text_ok(s->names[seat],n) || !n){
             memcpy(s->names[seat],"PLAYER 1",8);s->names[seat][7]='1'+seat;n=8;
         }
@@ -72,7 +73,7 @@ static int checksum(UrClient *c,uint32_t frame,uint32_t hash,uint8_t mask,int lo
      * invalid command, not a replacement for an already announced checksum. */
     if(local && (v->mask&mask) && hash!=v->hash)return 0;
     if(v->mask && hash!=v->hash){
-        if(!s->desync){s->check_frame=frame;s->check_hash=v->hash;s->check_known=1;}
+        if(!s->desync){uc_note_failure(c,3,6,v->mask|mask);s->check_frame=frame;s->check_hash=v->hash;s->check_known=1;}
         if(s->check_frame==frame)s->desync|=v->mask|mask;
     }
     if(local && !(v->mask&mask)){
@@ -94,6 +95,7 @@ int us_check(UrClient *c,uint32_t frame,uint32_t hash){
 }
 void us_end(UrClient *c,uint8_t code,uint32_t now){
     UrServices *s=&c->services;
+    if(code>US_ENDED)uc_note_failure(c,4,code,0);
     if(!s->end_code)s->end_at=now;
     if(code>s->end_code){s->end_code=code;s->end_send=1;}
     s->end_mask|=c->history.local;
@@ -102,7 +104,7 @@ uint8_t us_end_status(UrClient *c,uint32_t now){
     UrServices *s=&c->services;
     if(!s->end_code)return 0;
     if(s->end_result)return s->end_result;
-    if(now-s->end_at>=US_END_MS)return s->end_result=US_SESSION_TIMEOUT;
+    if(now-s->end_at>=US_END_MS){uc_note_failure(c,4,US_SESSION_TIMEOUT,0);return s->end_result=US_SESSION_TIMEOUT;}
     if(s->end_mask!=c->history.all || s->end_send || c->service.pending)return 0;
     for(unsigned i=0;i<4;i++)if(c->service.peer[i].ack_pending)return 0;
     return s->end_result=s->end_code;
@@ -131,7 +133,7 @@ static int receive(UrClient *c,unsigned peer,const UoPeer *v,uint32_t now){
     if(!n || v->rx_channel)return 0;
     if(p[0]==US_HELLO && n==6){
         if(p[1]!=US_AUTO_DELAY || p[2]>p[3] || p[3]>8 || p[4]<10 || p[4]>50 || p[5]>8)return 0;
-        if(!s->flags || p[4]!=s->tick || p[5]!=s->window){s->failure=7;return 1;}
+        if(!s->flags || p[4]!=s->tick || p[5]!=s->window){failure(c,7);return 1;}
         if((s->seen&mask) && memcmp(s->policy[peer],p+1,5))return 0;
         memcpy(s->policy[peer],p+1,5);s->seen|=mask;
     }else if(p[0]==US_OFFER && n==2){
@@ -177,7 +179,7 @@ static int receive(UrClient *c,unsigned peer,const UoPeer *v,uint32_t now){
 static void negotiate(UrClient *c,uint32_t now){
     UrServices *s=&c->services;
     if(!s->flags || s->ready || s->failure)return;
-    if(now-s->born>=10000){s->failure=7;return;}
+    if(now-s->born>=10000){failure(c,7);return;}
     if(s->seen!=c->history.all)return;
     unsigned lower=s->minimum,upper=s->maximum,rtt=0,jitter=0;uint8_t measured=c->history.local;
     for(unsigned i=0;i<4;i++)if(i!=c->peer && c->pace.peer[i].mask){
@@ -188,7 +190,7 @@ static void negotiate(UrClient *c,uint32_t now){
         if(v->rtt>rtt)rtt=v->rtt;
         if(v->jitter>jitter)jitter=v->jitter;
     }
-    if(lower>upper){s->failure=7;return;}
+    if(lower>upper){failure(c,7);return;}
     if(!(s->offered&c->history.local)){
         if(now-s->born<1000 || measured!=c->history.all)return;
         /* One frame of scheduling margin; RTT/2 is an estimate, not a clock
@@ -201,7 +203,7 @@ static void negotiate(UrClient *c,uint32_t now){
     if(s->offered!=c->history.all)return;
     unsigned chosen=s->proposal;
     for(unsigned i=0;i<4;i++)if(i!=c->peer && c->pace.peer[i].mask){
-        if(s->offers[i]<lower || s->offers[i]>upper){s->failure=7;return;}
+        if(s->offers[i]<lower || s->offers[i]>upper){failure(c,7);return;}
         if(s->offers[i]>chosen)chosen=s->offers[i];
     }
     s->delay=chosen;s->ready=1;
@@ -213,7 +215,7 @@ void us_tick(UrClient *c,uint32_t now){
     for(unsigned i=0;i<4;i++)if(pending&(1u<<i)){
         UoPeer *v=&c->service.peer[i];int result=receive(c,i,v,now);
         if(result==2)continue;
-        if(!result)s->failure=8;
+        if(!result)failure(c,8);
         (void)uo_internal_ack(c,i,v->rx_id);
     }
     if(s->barrier_wait==1 && !s->end_code){
@@ -222,8 +224,10 @@ void us_tick(UrClient *c,uint32_t now){
         if(s->barrier_wait==1 && !s->end_code && now-s->barrier_at>=US_BARRIER_MS)
             us_end(c,US_SESSION_TIMEOUT,now);
     }
-    for(unsigned i=0;i<4;i++)if(c->pace.peer[i].mask && now-c->pace.peer[i].seen_at>15000)
+    for(unsigned i=0;i<4;i++)if(c->pace.peer[i].mask && now-c->pace.peer[i].seen_at>15000){
+        uc_note_failure(c,4,US_SESSION_TIMEOUT,c->pace.peer[i].mask);
         us_end(c,US_SESSION_TIMEOUT,now);
+    }
     if(!s->end_code)negotiate(c,now);
     uint8_t p[3+US_NAME_MAX],n=0;unsigned seat=4,index=US_CHECK_SLOTS;
     if(s->end_send){p[0]=US_END;p[1]=s->end_code;n=2;}
@@ -244,7 +248,7 @@ void us_tick(UrClient *c,uint32_t now){
     }
     if(n){
         uint8_t result=uo_internal_send(c,p,n,now);
-        if(!result)s->failure=8;
+        if(!result)failure(c,8);
         if(result==1){
             if(s->end_send)s->end_send=0;
             else if(s->barrier_send)s->barrier_send=0;

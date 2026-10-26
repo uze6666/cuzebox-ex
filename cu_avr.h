@@ -33,6 +33,7 @@
 
 
 #include "cu_types.h"
+#include "cu_hw_features.h"
 
 /* Optional display-only horizontal sync recovery, disabled by default. */
 void cu_avr_set_interlace(boole enable);
@@ -318,6 +319,22 @@ boole cu_avr_crom_ismod(void);
 */
 cu_state_cpu_t* cu_avr_get_state(void);
 boole cu_avr_timer1_compare_blocked(void);
+/* External digital input fixture: ports A..D are 0..3; zero mask releases. */
+#if FLAG_AVR_GPIO
+void cu_avr_gpio_set_input(auint port,auint mask,auint value);
+#else
+static inline void cu_avr_gpio_set_input(auint port,auint mask,auint value)
+{ (void)port; (void)mask; (void)value; }
+#endif
+#if CU_HW_FEATURES
+void cu_avr_hardware_state(uint32 *phase,uint32 *mask,uint32 *value);
+void cu_avr_hardware_restore(uint32 phase,uint32 mask,uint32 value);
+#else
+static inline void cu_avr_hardware_state(uint32 *phase,uint32 *mask,uint32 *value)
+{ *phase=0U; *mask=0U; *value=0U; }
+static inline void cu_avr_hardware_restore(uint32 phase,uint32 mask,uint32 value)
+{ (void)phase; (void)mask; (void)value; }
+#endif
 void cu_avr_timer1_restore_compare_block(boole blocked);
 
 

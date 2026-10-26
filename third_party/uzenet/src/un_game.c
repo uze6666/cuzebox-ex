@@ -12,7 +12,7 @@ static uint8_t record(UrClient *c,uint32_t frame,uint8_t *p){
     p[0]=(uint8_t)frame;p[1]=mask|(uo_pending(c)?UN_FRAME_OOB:0);p[2]=(uint8_t)c->next;p[3]=(uint8_t)c->history.floor;
     for(unsigned s=0;s<4;s++)if((c->history.all&~c->history.local)&(1u<<s)){
         memset(p+used,0,c->history.width);
-        if(mask&(1u<<s))memcpy(p+used,v->pads+2*s,c->history.width);
+        if(mask&(1u<<s))memcpy(p+used,v->pads+UR_STRIDE(c->history.width)*s,c->history.width);
         used+=c->history.width;
     }
     return used;
@@ -46,13 +46,13 @@ uint8_t ug_command(UrGame *g,UrClient *c,uint8_t type,const uint8_t *p,uint8_t n
         memcpy(reply,p,5);reply[5]=UR_WINDOW;used=6;
     }else if(type==UN_TICK && g->active && n==3+__builtin_popcount(c->history.local)*c->history.width){
         uint32_t frame=expand(c->history.floor,p[0]),consume=expand(c->released,p[1]),want=expand(c->released,p[2]);
-        uint8_t pads[8]={0},at=3;
+        uint8_t pads[UR_PAD_MAX]={0},at=3;
         if(frame-c->history.floor>=UR_WINDOW || frame<c->released || frame>c->next ||
            consume>frame || consume-c->released>UR_WINDOW || want<consume || want-c->history.floor>=UR_WINDOW ||
            !up_valid(c,want) || frame<want || frame-want>UP_INPUT_LEAD)goto failed;
         /* Validate the entire release before changing any state. */
         for(uint32_t f=c->released;f<consume;f++){UrFrame *v=ur_frame(&c->history,f,0);if(!v || v->mask!=c->history.all)goto failed;}
-        for(unsigned s=0;s<4;s++)if(c->history.local&(1u<<s)){memcpy(pads+2*s,p+at,c->history.width);at+=c->history.width;}
+        for(unsigned s=0;s<4;s++)if(c->history.local&(1u<<s)){memcpy(pads+UR_STRIDE(c->history.width)*s,p+at,c->history.width);at+=c->history.width;}
         if(!uc_submit(c,frame,pads))goto failed;
         for(uint32_t f=c->released;f<consume;f++)g->delivered[f&(UR_WINDOW-1)]=0;
         (void)uc_release(c,consume);(void)uc_fetch(c,want);
@@ -92,7 +92,7 @@ failed:
     reply[0]=type;reply[1]=error;un_send(UN_ERROR,reply,2);return 1;
 }
 void ug_push(UrGame *g,UrClient *c){
-    uint8_t reply[10];
+    uint8_t reply[4+UR_PAD_MAX];
     if(!g->active || !(g->mode&UG_PUSH) || !g->credit || c->state!=UC_READY)return;
     for(unsigned i=0;i<UR_WINDOW;i++){
         uint32_t f=c->released+((g->scan+i)&(UR_WINDOW-1));

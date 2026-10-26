@@ -29,6 +29,10 @@
 
 #include "cu_esp_uzenet.h"
 #include "cu_avr.h"
+#include "cu_hw_features.h"
+#if FLAG_AVR_TIMER1_CLOCK
+#include "cu_timer1_clock.h"
+#endif
 #ifdef TARGET_EMSCRIPTEN
 extern void web_uart_gpio(auint,auint,auint);
 extern void web_uart_reset_gpio(auint,auint);
@@ -324,6 +328,28 @@ auint           cycle_next_event;
 auint           timer1_base;
 /* TCNT1 writes inhibit compare matches on the next running timer clock. */
 static boole    timer1_compare_blocked;
+#if FLAG_AVR_TIMER1_CLOCK
+static cu_timer1_clock_t timer1_clock;
+static auint timer1_value(void)
+{
+ cu_timer1_advance(&timer1_clock, (uint32_t)cpu_state.cycle);
+ return timer1_clock.count;
+}
+#endif
+#if FLAG_AVR_GPIO
+static uint8 gpio_drive_mask[4], gpio_drive_value[4];
+static auint gpio_pixels;
+#define CU_AVR_PIXEL_VALUE gpio_pixels
+#define CU_AVR_PIXEL_WRITE(value) do { \
+ cpu_state.iors[CU_IO_PORTC] = (value); \
+ gpio_pixels = cpu_state.iors[CU_IO_PORTC] & cpu_state.iors[CU_IO_DDRC]; \
+} while(0)
+#else
+#define CU_AVR_PIXEL_VALUE cpu_state.iors[CU_IO_PORTC]
+#define CU_AVR_PIXEL_WRITE(value) do { \
+ cpu_state.iors[CU_IO_PORTC] = (value) & cpu_state.iors[CU_IO_DDRC]; \
+} while(0)
+#endif
 
 /* Interrupt might be waiting to be serviced flag. This is set nonzero by
 ** any event which should trigger an IT including setting the I flag in the
@@ -457,7 +483,7 @@ auint           wd_interval_end[2];
    /* UPDATE_HARDWARE samples after advancing the absolute clock. Convert \
    ** the live instruction-boundary position back to the cycle just emitted. */ \
    if (cu_beam_cycle_ != 0U){ cu_beam_cycle_ --; } \
-   if (cu_beam_cycle_ < 2032U){ video_beam_pixels[cu_beam_cycle_] = cpu_state.iors[CU_IO_PORTC]; } \
+   if (cu_beam_cycle_ < 2032U){ video_beam_pixels[cu_beam_cycle_] = CU_AVR_PIXEL_VALUE; } \
   } \
  }while(0)
 #else
@@ -468,7 +494,7 @@ auint           wd_interval_end[2];
  do{ \
   cpu_state.cycle = WRAP32(cpu_state.cycle + 1U); \
   if (cycle_next_event == cpu_state.cycle){ cu_avr_hwexec(); } \
-  video_row.pixels[video_cycle] = cpu_state.iors[CU_IO_PORTC]; \
+  video_row.pixels[video_cycle] = CU_AVR_PIXEL_VALUE; \
   video_cycle ++; \
   UPDATE_VIDEO_BEAM; \
  }while(0)
@@ -558,6 +584,49 @@ static void  cu_avr_reset_wd(void)
 ** UPDATE_HARDWARE macro if cycle_next_event matches the cycle counter (a new
 ** HW event is to be processed).
 */
+#if FLAG_AVR_TIMER1_CLOCK
+static auint timer1_clock_exec(void)
+{
+ uint32_t ticks = cu_timer1_advance(&timer1_clock, (uint32_t)cpu_state.cycle);
+ auint count = timer1_clock.count, flags = 0U, next;
+ auint a = ((cpu_state.iors[CU_IO_OCR1AH] << 8) | cpu_state.iors[CU_IO_OCR1AL]) + 1U;
+ auint b = ((cpu_state.iors[CU_IO_OCR1BH] << 8) | cpu_state.iors[CU_IO_OCR1BL]) + 1U;
+ auint mode = ((cpu_state.iors[CU_IO_TCCR1B] >> 1) & 12U) | (cpu_state.iors[CU_IO_TCCR1A] & 3U);
+ a &= 65535U;
+ b &= 65535U;
+ /* Only a counter edge can consume inhibition or latch a timer flag. */
+ if (ticks){
+  if (count == 0U){ flags |= 1U; }
+  if (timer1_compare_blocked){ timer1_compare_blocked = FALSE; }
+  else if (mode == 0U || mode == 4U){
+   if (count == b){ flags |= 4U; }
+   if (count == a){
+    flags |= 2U;
+    if (mode == 4U){ timer1_clock.count = 0U; count = 0U; }
+   }
+  }
+ }
+ cpu_state.iors[CU_IO_TIFR1] |= flags;
+ if (flags){ event_it = TRUE; }
+#if defined(ENABLE_DEBUGGER) && defined(ENABLE_API_SERVER)
+ if(cu_debug_timing_trace_gate){
+  if(flags&1U)cu_debug_timing_trace_event(CU_TIMING_EVT_T1_OVF,1U,0U,video_beam_pulse,VIDEO_BEAM_CYCLE_NOW(),cpu_state.cycle);
+  if(flags&2U)cu_debug_timing_trace_event(CU_TIMING_EVT_T1_COMPA,1U,a,video_beam_pulse,VIDEO_BEAM_CYCLE_NOW(),cpu_state.cycle);
+  if(flags&4U)cu_debug_timing_trace_event(CU_TIMING_EVT_T1_COMPB,1U,b,video_beam_pulse,VIDEO_BEAM_CYCLE_NOW(),cpu_state.cycle);
+ }
+#endif
+ next = 65536U - count;
+ if (timer1_compare_blocked){ next = 1U; }
+ else if (mode == 0U || mode == 4U){
+  auint distance = (a - count) & 65535U;
+  if (distance && distance < next){ next = distance; }
+  distance = (b - count) & 65535U;
+  if (distance && distance < next){ next = distance; }
+ }
+ timer1_base = WRAP32(cpu_state.cycle - count);
+ return (auint)cu_timer1_until(&timer1_clock, next);
+}
+#endif
 static void cu_avr_hwexec(void)
 {
  auint nextev = ~0U;
@@ -567,6 +636,9 @@ static void cu_avr_hwexec(void)
 
  /* Timer 1 */
 
+#if FLAG_AVR_TIMER1_CLOCK
+ nextev=timer1_clock_exec();
+#else
  if ((cpu_state.iors[CU_IO_TCCR1B] & 0x07U) != 0U){ /* Timer 1 started */
 
   t0 = (cpu_state.cycle - timer1_base) & 0xFFFFU;   /* Current TCNT1 value */
@@ -665,6 +737,7 @@ static void cu_avr_hwexec(void)
 
  }
 
+#endif
  /* Watchdog (in Uzebox used to seed random number generators and soft reset) */
 
  if ((cpu_state.iors[CU_IO_WDTCSR] & 0x48U) != 0U){ /* Watchdog is operational */
@@ -1134,11 +1207,21 @@ static void  cu_avr_write_io(auint port, auint val)
 
   case CU_IO_PORTC:   /* Pixel output */
 
+#if FLAG_AVR_GPIO
+   gpio_pixels = cval & cpu_state.iors[CU_IO_DDRC];
+#else
    /* Special shortcut masking with the DDR register. This port tolerates a
    ** bit of inaccuracy since it is only graphics and is most frequently
    ** written "normally" (the DDR is used for fade effects on it) */
    cval &= cpu_state.iors[CU_IO_DDRC];
+#endif
    break;
+
+#if FLAG_AVR_GPIO
+  case CU_IO_DDRC:
+   gpio_pixels = cpu_state.iors[CU_IO_PORTC] & cval;
+   break;
+#endif
 
   case CU_IO_PORTD:   /* SD card Chip Select */
   case CU_IO_DDRD:
@@ -1184,6 +1267,10 @@ static void  cu_avr_write_io(auint port, auint val)
 
    t0    = (cpu_state.latch << 8) | cval;
    timer1_base = WRAP32(cpu_state.cycle - t0);
+#if FLAG_AVR_TIMER1_CLOCK
+   timer1_clock.count = (uint16_t)t0;
+   timer1_clock.cycle = (uint32_t)cpu_state.cycle;
+#endif
    timer1_compare_blocked = TRUE;
    cycle_next_event = WRAP32(cpu_state.cycle + 1U); /* Request HW processing */
    break;
@@ -1210,8 +1297,22 @@ static void  cu_avr_write_io(auint port, auint val)
   case CU_IO_TCCR1A:  /* Timer1 mode */
   case CU_IO_TCCR1B:  /* Timer1 control */
 
+#if FLAG_AVR_TIMER1_CLOCK
+   (void)timer1_value();
+   if (port == CU_IO_TCCR1B){ timer1_clock.source = (uint8)(cval & 7U); }
+#endif
    cycle_next_event = WRAP32(cpu_state.cycle + 1U); /* Request HW processing */
    break;
+
+#if FLAG_AVR_TIMER1_CLOCK
+  case CU_IO_GTCCR:
+   (void)timer1_value();
+   if ((cval & 1U) || timer1_clock.held){ timer1_clock.phase_origin = (uint32_t)cpu_state.cycle; }
+   timer1_clock.held = ((cval & 0x81U) == 0x81U);
+   if (!(cval & 0x80U)){ cval &= ~3U; }
+   cycle_next_event = WRAP32(cpu_state.cycle + 1U);
+   break;
+#endif
 
 
   case CU_IO_UDR0:    /* USART0 data */
@@ -1426,6 +1527,28 @@ static void  cu_avr_write_io(auint port, auint val)
 /*
 ** Reads from an I/O port
 */
+#if FLAG_AVR_GPIO
+static auint gpio_read(auint pin)
+{
+ auint n = (pin - CU_IO_PINA) / 3U;
+ auint ddr = cpu_state.iors[pin + 1U], latch = cpu_state.iors[pin + 2U];
+ auint mask = 0U, value = 0U, board_pullups = 0U;
+ if (n == 0U){ mask = 3U; value = cpu_state.iors[CU_IO_PINA] & 3U; board_pullups = 0x80U; }
+ if (n == 3U){ board_pullups = 8U; } /* ESP reset's board pull-up. */
+ value = (value & ~gpio_drive_mask[n]) | (gpio_drive_value[n] & gpio_drive_mask[n]);
+ mask |= gpio_drive_mask[n];
+ auint pulls = (cpu_state.iors[CU_IO_MCUCR] & 0x10U) ? 0U : latch;
+ auint inputs = (value & mask) | ((pulls | board_pullups) & ~mask);
+ return ((latch & ddr) | (inputs & ~ddr)) & 255U;
+}
+void cu_avr_gpio_set_input(auint port,auint mask,auint value)
+{
+ if (port < 4U){
+  gpio_drive_mask[port] = (uint8)mask;
+  gpio_drive_value[port] = (uint8)value;
+ }
+}
+#endif
 static auint cu_avr_read_io(auint port)
 {
  auint t0;
@@ -1436,12 +1559,31 @@ static auint cu_avr_read_io(auint port)
  switch (port){
 
   case CU_IO_PINA:
+#if FLAG_AVR_GPIO
+   ret=gpio_read(CU_IO_PINA);
+#ifdef TARGET_EMSCRIPTEN
+   ret=web_uart_pina(ret,cpu_state.cycle);
+#else
+   ret=cu_uzenet_pina(ret,cpu_state.cycle);
+#endif
+   if(gpio_drive_mask[0]&0x80U)ret&=gpio_drive_value[0]|0x7fU;
+   ret=(ret&~cpu_state.iors[CU_IO_DDRA])|
+       (cpu_state.iors[CU_IO_PORTA]&cpu_state.iors[CU_IO_DDRA]);
+#else
 #ifdef TARGET_EMSCRIPTEN
    ret=web_uart_pina(cpu_state.iors[CU_IO_PINA],cpu_state.cycle);
 #else
    ret = cu_uzenet_pina(cpu_state.iors[CU_IO_PINA],cpu_state.cycle);
 #endif
+#endif
    break;
+#if FLAG_AVR_GPIO
+  case CU_IO_PINB:
+  case CU_IO_PINC:
+  case CU_IO_PIND:
+   ret=gpio_read(port);
+   break;
+#endif
   case CU_IO_SPSR:
    ret = cu_avr_spi_status(&cpu_state);
    break;
@@ -1453,7 +1595,11 @@ static auint cu_avr_read_io(auint port)
    break;
 
   case CU_IO_TCNT1L:
+#if FLAG_AVR_TIMER1_CLOCK
+   t0=timer1_value();
+#else
    t0  = WRAP32(cpu_state.cycle - timer1_base); /* Current TCNT1 value */
+#endif
    cpu_state.latch = (t0 >> 8) & 0xFFU;
    ret = t0 & 0xFFU;
    break;
@@ -1753,6 +1899,15 @@ void  cu_avr_reset(void)
  cycle_next_event   = WRAP32(cpu_state.cycle + 1U);
  timer1_base        = cpu_state.cycle;
  timer1_compare_blocked = FALSE;
+#if FLAG_AVR_TIMER1_CLOCK
+ memset(&timer1_clock, 0, sizeof(timer1_clock));
+ timer1_clock.cycle = (uint32_t)cpu_state.cycle;
+#endif
+#if FLAG_AVR_GPIO
+ memset(gpio_drive_mask, 0, sizeof(gpio_drive_mask));
+ memset(gpio_drive_value, 0, sizeof(gpio_drive_value));
+ gpio_pixels = 0U;
+#endif
  event_it           = TRUE;
  event_it_enter     = FALSE;
  wd_last            = cpu_state.cycle;
@@ -2623,7 +2778,11 @@ boole cu_avr_crom_ismod(void)
 */
 cu_state_cpu_t* cu_avr_get_state(void)
 {
+#if FLAG_AVR_TIMER1_CLOCK
+ auint t0=timer1_value();
+#else
  auint t0 = WRAP32(cpu_state.cycle - timer1_base); /* Current TCNT1 value */
+#endif
 
  cpu_state.iors[CU_IO_TCNT1H] = (t0 >> 8) & 0xFFU;
  cpu_state.iors[CU_IO_TCNT1L] = (t0     ) & 0xFFU;
@@ -2691,6 +2850,16 @@ void  cu_avr_io_update(void)
          (cpu_state.iors[CU_IO_TCNT1L]     );
  timer1_base = WRAP32(cpu_state.cycle - t0);
  timer1_compare_blocked = FALSE;
+#if FLAG_AVR_TIMER1_CLOCK
+ timer1_clock.count = (uint16_t)t0;
+ timer1_clock.cycle = (uint32_t)cpu_state.cycle;
+ timer1_clock.phase_origin = (uint32_t)cpu_state.cycle;
+ timer1_clock.source = (uint8)(cpu_state.iors[CU_IO_TCCR1B] & 7U);
+ timer1_clock.held = ((cpu_state.iors[CU_IO_GTCCR] & 0x81U) == 0x81U);
+#endif
+#if FLAG_AVR_GPIO
+ gpio_pixels = cpu_state.iors[CU_IO_PORTC] & cpu_state.iors[CU_IO_DDRC];
+#endif
 
  cycle_next_event = WRAP32(cpu_state.cycle + 1U); /* Request HW processing */
  event_it         = TRUE; /* Request interrupt processing */
@@ -2703,6 +2872,39 @@ void cu_avr_timer1_restore_compare_block(boole blocked)
  timer1_compare_blocked = blocked;
  cycle_next_event = WRAP32(cpu_state.cycle + 1U);
 }
+
+#if CU_HW_FEATURES
+void cu_avr_hardware_state(uint32 *phase,uint32 *mask,uint32 *value)
+{
+ *phase=0U;*mask=0U;*value=0U;
+#if FLAG_AVR_TIMER1_CLOCK
+ *phase=((uint32)cpu_state.cycle-timer1_clock.phase_origin)&1023U;
+#endif
+#if FLAG_AVR_GPIO
+ for(auint i=0;i<4U;i++){
+  *mask|=(uint32)gpio_drive_mask[i]<<(i*8U);
+  *value|=(uint32)gpio_drive_value[i]<<(i*8U);
+ }
+#endif
+}
+void cu_avr_hardware_restore(uint32 phase,uint32 mask,uint32 value)
+{
+#if FLAG_AVR_TIMER1_CLOCK
+ timer1_clock.phase_origin=(uint32)cpu_state.cycle-(phase&1023U);
+#else
+ (void)phase;
+#endif
+#if FLAG_AVR_GPIO
+ for(auint i=0;i<4U;i++){
+  gpio_drive_mask[i]=(uint8)(mask>>(i*8U));gpio_drive_value[i]=(uint8)(value>>(i*8U));
+ }
+ gpio_pixels=cpu_state.iors[CU_IO_PORTC]&cpu_state.iors[CU_IO_DDRC];
+#else
+ (void)mask;(void)value;
+#endif
+ cycle_next_event = WRAP32(cpu_state.cycle + 1U);
+}
+#endif
 
 
 

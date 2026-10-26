@@ -7,7 +7,10 @@
 #define UO_WRITE_MAX 18
 #define UO_READ_MAX 14
 #define UO_FRAGMENT 24
-#define UO_INTERVAL_MS 20
+/* 120 updates/s to three peers plus their ACK/control
+ * traffic needs up to 720 packets/s. This is an aggregate send budget,
+ * not an update timer; idle clients generate no extra traffic. */
+#define UO_INTERVAL_MS 1
 typedef struct {
     UrReplay replay;
     uint32_t seq,tx_id,rx_id,consumed,ack_id,send_at;
@@ -32,7 +35,7 @@ int uo_receive(struct UrClient *c,unsigned peer,uint8_t mask,int ack,
                uint32_t id,const uint8_t *payload,uint32_t now);
 int uo_next(struct UrClient *c,uint32_t now,uint8_t packet[UR_PACKET_MAX],uint8_t destination[6]);
 /* Internal lane: authenticated payload byte 5 is 1 (ordinary chat is 0).
- * Both lanes share packet replay counters and the 20-ms network budget,
+ * Both lanes share packet replay counters and the profile's network budget,
  * but have independent message IDs, buffers, delivery/consumption ACKs. */
 uint8_t uo_internal_pending(const struct UrClient *c);
 int uo_internal_ack(struct UrClient *c,unsigned peer,uint32_t id);

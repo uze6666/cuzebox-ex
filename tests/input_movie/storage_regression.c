@@ -166,11 +166,12 @@ static int states_test(void)
  CHECK(!savestate_restore_from_mem(&blob) && cu_avr_get_state()->pc == pc, "nested SPI size cannot overrun backing allocation");
  CHECK(cu_spir_get_state()->size == meta.size, "invalid state leaves SPI RAM unchanged");
  memcpy(blob.data + meta_offset, &meta, sizeof(meta));
- blob.data[blob.size - 1U] = 0xFF;
+ size_t timer_end=blob.size-(CU_HW_FEATURES?sizeof(savestate_hardware_t):0U);
+ blob.data[timer_end - 1U] = 0xFF;
  CHECK(!savestate_validate_blob(&blob), "movie preflight validates timer trailer");
- blob.data[blob.size - 1U] = 0;
+ blob.data[timer_end - 1U] = 0;
  CHECK(savestate_restore_from_mem(&blob), "current state restores");
- blob.size -= sizeof(savestate_timer1_t);
+ blob.size=timer_end-sizeof(savestate_timer1_t);
  CHECK(savestate_restore_from_mem(&blob), "legacy state without timer trailer restores");
  savestate_free_blob(&blob);
  cu_spir_set_size(0);

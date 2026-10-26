@@ -60,7 +60,7 @@ a v3/v4-capable reader; choosing Full Debug does not downgrade the format.
 | 60 | 2 × u8 | Multitap presence for P1 and P2 |
 | 62 | 2 bytes | Reserved, zero |
 | 64 | 8 × u8 | Slot types, P1 slots 0–3 then P2 slots 0–3: 0=none, 1=pad, 2=Super Mouse, 3=keyboard |
-| 72 | u32 | v3/v4: emulator behavior identifier (`0x20261015`); v1/v2: zero |
+| 72 | u32 | v3/v4: emulator behavior identifier (`0x20261015` in the default build); v1/v2: zero |
 | 76 | u32 | v3/v4: fingerprint schema 1; v1/v2: zero |
 | 80 | 24 bytes | Reserved, zero |
 
@@ -74,7 +74,9 @@ The 2026-10-15 interrupt/EEPROM corrections leave this v1 container and native
 state layout unchanged, but can desynchronize older recordings. The v1/v2 ABI
 signature does not identify those semantic changes; affected recordings need to
 be remade. v3/v4 additionally require an exact behavior identifier match before
-restoring state. Maintainers must bump `CAPTURE_BEHAVIOR_ID` in `capture.h` when
+restoring state. The optional [AVR hardware models](avr-hardware-options.md)
+use distinct identifiers for each compiled flag combination. Maintainers must
+bump the base `CAPTURE_BEHAVIOR_ID` in `capture.h` when
 core semantics change; it is independent of native layout and is not a Git SHA.
 The CRC implementation now uses a 16-entry nibble table with identical results.
 

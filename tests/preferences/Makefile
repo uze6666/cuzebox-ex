@@ -19,6 +19,14 @@ timer1-test: $(OBD)/timer1_regression.exe
 $(OBD)/timer1_regression.exe: tests/bootloader/timer1_regression.c tests/preferences/Makefile cu_avr.c main.c $(PREF_TEST_OBJECTS) $(DEPS) | $(OBD)
 	$(CC) -I. -o $@ $< $(filter-out $(OBD)/cu_avr.o,$(PREF_TEST_OBJECTS)) $(filter-out -Dmain=SDL_main,$(CFSPD)) $(filter-out -mwindows -lSDL2main -lmingw32,$(LINKB))
 
+.PHONY: hardware-test
+hardware-test: $(OBD)/hardware_regression.exe
+	mkdir -p $(OBD)/hardware-run
+	cd $(OBD)/hardware-run && ../hardware_regression.exe
+
+$(OBD)/hardware_regression.exe: tests/bootloader/hardware_regression.c tests/bootloader/timer1_regression.c cu_avr.c $(PREF_TEST_OBJECTS) $(DEPS) | $(OBD)
+	$(CC) -I. -o $@ $< $(filter-out $(OBD)/cu_avr.o,$(PREF_TEST_OBJECTS)) $(filter-out -Dmain=SDL_main,$(CFSPD)) $(filter-out -mwindows -lSDL2main -lmingw32,$(LINKB))
+
 # Local comparison only: snapshot cu_avr.c to _obj_/timer1-baseline.c before editing.
 $(OBD)/timer1_old_cpu.o: _obj_/timer1-baseline.c $(DEPS) | $(OBD)
 	$(CC) -I. -c $< -o $@ $(filter-out -flto -flto=auto,$(CFSPD))

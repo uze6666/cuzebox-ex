@@ -49,6 +49,17 @@ uint8_t un_deferred_pop(UnSession *s,uint8_t *out) {
     *out=s->deferred[s->head];s->head=(s->head+1)%UN_DEFERRED_BYTES;s->count--;
     return 1;
 }
+void un_discard_ready_beacons(UnSession *s){
+    uint16_t remaining=s->count;uint8_t bytes[4],used=0;
+    while(remaining--){
+        (void)un_deferred_pop(s,bytes+used++);
+        if(used==4){
+            if(bytes[0]=='!' && bytes[1]=='M' && !bytes[2] && !bytes[3])used=0;
+            else{(void)un_defer(s,bytes,1);memmove(bytes,bytes+1,3);used=3;}
+        }
+    }
+    (void)un_defer(s,bytes,used);
+}
 uint8_t un_session_byte(UnSession *s,uint8_t byte) {
     uint8_t n=un_receive(&s->rx,byte),reply[UN_PAYLOAD_MAX],type;
     if(!n || !s->active) return 0;

@@ -23,6 +23,21 @@ EM_JS(void, web_nonce, (uint8_t *p), {
 });
 static uint32_t now_ms(void){return (uint32_t)emscripten_get_now();}
 
+/* The authenticated browser connection supplies its display name. Preserve
+ * complete UTF-8 characters within the firmware profile's 24-byte limit. */
+EM_JS(int, web_profile_name, (uint8_t *p), {
+    const encoder=new TextEncoder();let bytes=[];
+    for(const character of String(Module.uzenetPlayerName || '')){
+        const part=encoder.encode(character);
+        if(bytes.length+part.length>24)break;
+        bytes.push(...part);
+    }
+    HEAPU8.set(bytes,p);return bytes.length || -1;
+});
+int us_profile_read(uint8_t local,uint8_t text[US_NAME_MAX]){
+    return local?-1:web_profile_name(text);
+}
+
 /* These records never go directly to UDP. The gateway verifies incoming MACs
  * and seals outgoing records with this connection's server-held traffic key.
  * Reject a non-redacted key so this adapter cannot masquerade as native crypto. */
@@ -46,16 +61,22 @@ void web_endpoint_connect(unsigned enabled){
     ue_reset(&endpoint);ug_reset(&game);uc_reset(&client);memset(&rx,0,sizeof(rx));
     memset(incoming,0,sizeof(incoming));
 }
+EMSCRIPTEN_KEEPALIVE void web_net_tick(void);
 void web_endpoint_byte(uint8_t value){
     if(!connected)return;
     unsigned n=un_receive(&rx,value);
-    if(n && rx.data[0]==UE_REQUEST)ue_command(&endpoint,&game,&client,rx.data+1,n-1,now_ms());
+    if(n && rx.data[0]==UE_REQUEST){
+        ue_command(&endpoint,&game,&client,rx.data+1,n-1,now_ms());
+        web_net_tick();
+    }
 }
 EMSCRIPTEN_KEEPALIVE void web_net_tick(void){
     uint32_t now=now_ms();
-    if(!connected || (serviced && now==last_service))return;
-    serviced=1;last_service=now;
-    ue_tick(&endpoint,&client,now);
+    if(!connected)return;
+    if(!serviced || now!=last_service){
+        serviced=1;last_service=now;
+        ue_tick(&endpoint,&client,now);
+    }
     uint8_t packet[UR_PACKET_MAX],destination[6];
     if(uc_next(&client,now,packet))web_packet_send(2,packet,UR_SIZE(packet));
     if(up_next(&client,now,packet,destination))web_packet_send(2,packet,UR_SIZE(packet));

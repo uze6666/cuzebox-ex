@@ -19,11 +19,11 @@ pending suppression survives save-state and rewind restoration via an optional
 12-byte timer trailer; the existing CPU layout and version-1 save-state header
 are unchanged. Old states without this trailer remain loadable.
 
-This is a focused correction to compare-event handling. It does not add full
-Timer1 prescaler/external-clock, stopped-counter, PWM, input-capture, force-
-compare, or OC1A/OC1B output-pin emulation. The existing model counts one timer
-tick per CPU cycle for enabled clock selections. Software needing those other
-features still needs additional emulation work.
+The default build counts one timer tick per CPU cycle for enabled clock
+selections. The optional `FLAG_AVR_TIMER1_CLOCK=1` build adds internal prescaling,
+counter stop/start and GTCCR prescaler reset/hold. It remains disabled by default.
+See [AVR hardware build options](avr-hardware-options.md) for build commands,
+state/replay compatibility and the remaining unsupported timer features.
 
 Behavior follows the [ATmega644 datasheet](https://ww1.microchip.com/downloads/en/DeviceDoc/doc2593.pdf),
 particularly sections 14.7 (compare units), 14.7.2 (blocking after counter

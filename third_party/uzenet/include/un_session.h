@@ -34,6 +34,9 @@ void un_session_enter(UnSession *s);
 uint8_t un_session_byte(UnSession *s,uint8_t byte);
 uint16_t un_defer(UnSession *s,const uint8_t *p,uint16_t length);
 uint8_t un_deferred_pop(UnSession *s,uint8_t *out);
+/* Drop-in START consumes passive Room !M/00/00 beacons. Preserve every other
+ * byte, including partial records. Call while holding the UART TX lock. */
+void un_discard_ready_beacons(UnSession *s);
 void un_session_rx_reset(UnSession *s);
 /* Optional transport backend. Requests and replies stay UART grant driven. */
 uint8_t un_session_extension(uint8_t type,const uint8_t *payload,uint8_t length);

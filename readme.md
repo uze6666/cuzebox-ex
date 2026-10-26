@@ -33,6 +33,7 @@ configuration, workflows, and implementation details beyond this quick guide.
 | CPU/source debugging, symbols, watches and profiles | [Debugger](documentation/debugger.md), [web debugger and diagnostics](documentation/web-debugger.md) |
 | Input capture playback and video export | [Input files](documentation/input-files.md) |
 | Timer1 compare behavior and emulation limits | [Timer1](documentation/timer1.md) |
+| Optional Timer1 clock and GPIO models | [AVR hardware build options](documentation/avr-hardware-options.md) |
 | Advanced API inspection | [Run control](documentation/api-run-control.md), [breakpoints](documentation/api-breakpoints.md), [watchpoints](documentation/api-watchpoints.md), [memory snapshots](documentation/api-memory-snapshots.md), [memory scans](documentation/api-memory-scans.md), [profiler](documentation/api-profiler.md), [stack](documentation/api-stack.md) |
 | Controllers, UzeTap, UzeBus and virtual devices | [Input topology](documentation/input-topology.md) |
 | Multiplayer gameplay | [Netplay](documentation/netplay.md) |

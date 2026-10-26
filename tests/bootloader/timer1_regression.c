@@ -19,6 +19,9 @@ static void setup(auint cycle, auint count, auint a, auint b, boole ctc)
  cpu_state.iors[CU_IO_OCR1AH] = a >> 8;
  cpu_state.iors[CU_IO_OCR1BL] = b & 255U;
  cpu_state.iors[CU_IO_OCR1BH] = b >> 8;
+#if FLAG_AVR_TIMER1_CLOCK
+ timer1_clock=(cu_timer1_clock_t){(uint32_t)cycle,(uint32_t)cycle,(uint16_t)count,1U,0U};
+#endif
 timer1_compare_blocked = FALSE;
  event_it_enter = FALSE;
  cu_avr_hwexec();
@@ -46,7 +49,10 @@ static void benchmark(boole ctc)
  printf("%s scheduler: %.6f s, checksum %u\n", ctc ? "CTC" : "normal", (double)(clock() - begin) / CLOCKS_PER_SEC, (unsigned)checksum);
 }
 
-int main(int argc, char** argv)
+#ifndef TIMER1_TEST_ENTRY
+#define TIMER1_TEST_ENTRY main
+#endif
+int TIMER1_TEST_ENTRY(int argc, char** argv)
 {
  (void)argv;
  if (argc > 1){ benchmark(TRUE); benchmark(FALSE); return 0; }
@@ -97,7 +103,11 @@ int main(int argc, char** argv)
  setup(1U, 1U, 9U, 19U, FALSE);
  write_counter(9U); next();
  CHECK(!(cpu_state.iors[CU_IO_TIFR1] & 2U), "TCNT write blocks A on following clock");
+#if !FLAG_AVR_TIMER1_CLOCK
  next(); CHECK(cycle_next_event == 12U, "blocked clock restores B scheduling"); next();
+#else
+ CHECK(cycle_next_event == 12U, "blocked divided clock restores B scheduling"); next();
+#endif
  CHECK(cpu_state.iors[CU_IO_TIFR1] & 4U, "B still works after blocked A");
  setup(1U, 1U, 65535U, 65535U, FALSE);
  write_counter(65535U); next();
@@ -105,12 +115,16 @@ int main(int argc, char** argv)
  setup(1U, 1U, 9U, 19U, TRUE);
  write_counter(9U); next();
  CHECK(!(cpu_state.iors[CU_IO_TIFR1] & 2U) && timer1_base != cpu_state.cycle, "blocked CTC A does not clear counter");
+#if !FLAG_AVR_TIMER1_CLOCK
  next(); CHECK(cycle_next_event == 12U, "CTC restores B target after blocking");
+#else
+ CHECK(cycle_next_event == 12U, "CTC restores B target after blocking");
+#endif
  setup(1U, 1U, 9U, 9U, TRUE); next();
  CHECK((cpu_state.iors[CU_IO_TIFR1] & 7U) == 6U && timer1_base == 10U && cycle_next_event == 20U, "existing CTC simultaneous compares/reset retained");
 
  setup(1U, 1U, 9U, 19U, FALSE);
- cpu_state.iors[CU_IO_TCCR1B] = 0U;
+ cu_avr_write_io(CU_IO_TCCR1B, 0U);
  write_counter(9U); next();
  CHECK(timer1_compare_blocked && !(cpu_state.iors[CU_IO_TIFR1] & 6U), "stopped timer retains compare inhibition");
  cu_avr_write_io(CU_IO_TCCR1B, 1U); next();
@@ -134,7 +148,7 @@ int main(int argc, char** argv)
  cpu_state.crom[VECT_T1COMPA * 2U + 6U] = 0x18U;
  cpu_state.crom[VECT_T1COMPA * 2U + 7U] = 0x95U; /* RETI */
  cu_avr_reset();
- cpu_state.iors[CU_IO_TCCR1B] = 1U;
+ cu_avr_write_io(CU_IO_TCCR1B, 1U);
  cpu_state.iors[CU_IO_OCR1AL] = 9U;
  cpu_state.iors[CU_IO_OCR1BH] = 255U; cpu_state.iors[CU_IO_OCR1BL] = 255U;
  cpu_state.iors[CU_IO_TIMSK1] = 2U;
@@ -155,7 +169,7 @@ int main(int argc, char** argv)
  CHECK(savestate_restore_from_mem(&state), "restore new snapshot");
  CHECK(timer1_compare_blocked && cpu_state.cycle == cycle, "rewind preserves pending inhibition");
  next(); CHECK(!(cpu_state.iors[CU_IO_TIFR1] & 2U), "restored inhibition prevents spurious A");
- state.size -= 12U; /* The same version-1 state without the optional timer trailer. */
+ state.size -= 12U + (CU_HW_FEATURES ? 24U : 0U); /* Import the legacy state without optional trailers. */
  CHECK(savestate_restore_from_mem(&state) && !timer1_compare_blocked, "legacy state without trailer remains loadable");
  savestate_free_blob(&state);
  puts("Timer1 regression: PASS (normal/CTC flags, scheduling, rollover, register writes, masking, TCNT blocking, save/rewind compatibility)");

@@ -329,3 +329,7 @@ FLAG_HEADLESS=0
 
 # Native ESP TLS and Uzenet authentication; needs target OpenSSL development libraries.
 FLAG_OPENSSL=0
+
+# Optional AVR clock and GPIO models. Legacy release behavior is the default.
+FLAG_AVR_TIMER1_CLOCK=0
+FLAG_AVR_GPIO=0

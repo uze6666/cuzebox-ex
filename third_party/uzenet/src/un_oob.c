@@ -1,4 +1,5 @@
 #include "un_client.h"
+#include "un_snapshot.h"
 #include <string.h>
 static uint8_t seat_mask(const UrClient *c,unsigned i){
     return c->peers[i].known?c->peers[i].mask:
@@ -47,7 +48,7 @@ uint8_t uo_internal_send(UrClient *c,const uint8_t *data,uint8_t n,uint32_t now)
     UrOob *o=&c->service;
     if(!n || n>UO_MESSAGE_MAX || o->id==65535)return 0;
     if(o->pending || o->uploaded!=o->total)return 2;
-    uint8_t dest=c->history.all&~c->history.local;
+    uint8_t dest=(c->protocol==UR_PROFILE_LOBBY?c->lobby.active:c->history.all)&~c->history.local;
     if(!dest)return 1;
     uint16_t id=o->id+1;uint8_t p[24]={id,id>>8,dest,0,n,0};
     for(unsigned offset=0;offset<n;){
@@ -93,14 +94,51 @@ static void acknowledge(UoPeer *v,uint32_t id,const uint8_t *p,uint8_t count){
     v->ack_pending=1;v->ack_id=id;memset(v->ack,0,8);
     v->ack[0]=p[0];v->ack[1]=p[1];v->ack[2]=count;v->ack[4]=p[4];v->ack[5]=p[5];
 }
+/* Snapshot stream lane 2: epoch in bytes 2/3, one or two complete 11-byte
+ * car records in bytes 8..29. It shares authentication/replay protection
+ * with OOB, but has no message ACK, fragmentation, or reliable-lane state.
+ * Per-car sequence checks reject reordered state without rejecting a fresh
+ * update for a different car. This lane is exclusive to snapshot lobbies. */
+static int snapshot_receive(UrClient *c,uint8_t source,uint32_t id,const uint8_t *p){
+    if(c->protocol!=UR_PROFILE_LOBBY || !un_snapshot_enabled(c->config) || c->lobby.phase!=2 ||
+       p[0]!=0xce || (p[1]!=11 && p[1]!=22) || p[6] || p[7] ||
+       ((uint16_t)p[2]|((uint16_t)p[3]<<8))!=c->lobby.epoch)return 0;
+    unsigned seen=0;
+    for(unsigned at=0;at<p[1];at+=11){
+        const uint8_t *v=p+8+at;unsigned car=v[0]&3u,bit=1u<<car;
+        if((v[0]&0xe0) || (v[0]>>2)>4 || v[3]>15 || v[6]>=237 ||
+           (seen&bit) || source!=((c->lobby.active&bit)?bit:1u))return 0;
+        seen|=bit;
+    }
+    for(unsigned at=p[1];at<24;at++)if(p[8+at])return 0;
+    if(c->snapshots.epoch!=c->lobby.epoch){
+        memset(&c->snapshots,0,sizeof c->snapshots);c->snapshots.epoch=c->lobby.epoch;
+    }
+    for(unsigned at=0;at<p[1];at+=11){
+        const uint8_t *v=p+8+at;unsigned car=v[0]&3u;
+        if(id<=c->snapshots.received[car])continue;
+        uint8_t *out=c->snapshots.data[car];
+        uint16_t x=v[1]|((uint16_t)(v[2]&3u)<<8);
+        uint16_t y=(v[2]>>2)|((uint16_t)v[3]<<6);
+        out[0]=car;out[1]=0;out[2]=x;out[3]=x>>8;out[4]=y;out[5]=y>>8;
+        out[6]=v[4];out[7]=v[5];out[8]=v[6];out[9]=v[0]>>2;
+        memcpy(out+10,v+7,4);c->snapshots.received[car]=id;
+        c->snapshots.valid|=1u<<car;c->snapshots.unread|=1u<<car;
+    }
+    return 1;
+}
 int uo_receive(UrClient *c,unsigned peer,uint8_t mask,int ack,uint32_t id,const uint8_t *p,uint32_t now){
     UrOob *o=p[5]?&c->service:&c->oob;
     if(c->state!=UC_READY || peer>=4 || peer==c->peer || !id || !mask ||
        (mask&~c->history.all) || (mask&c->history.local) ||
-       !p[1] || p[1]>UO_MESSAGE_MAX || p[5]>1 || p[6] || p[7])return 0;
+       !p[1] || p[1]>UO_MESSAGE_MAX || p[5]>2 || p[6] || p[7])return 0;
     UoPeer *v=&o->peer[peer];uint8_t known=seat_mask(c,peer);
     if((known && known!=mask) || (v->mask && v->mask!=mask))return 0;
     for(unsigned i=0;i<4;i++)if(i!=peer && (seat_mask(c,i)&mask))return 0;
+    if(p[5]==2){
+        if(ack || !p[4] || (p[4]&~c->history.local) || (mask&c->lobby.active)!=mask)return 0;
+        return snapshot_receive(c,mask,id,p);
+    }
     if(ack){
         if(p[3] || !(o->pending&(1u<<peer)) || o->uploaded!=o->total || id!=v->tx_id ||
            p[0]!=o->channel || p[1]!=o->total || p[4]!=(o->dest&mask) ||
@@ -126,8 +164,9 @@ int uo_receive(UrClient *c,unsigned peer,uint8_t mask,int ack,uint32_t id,const 
 }
 static int next_lane(UrClient *c,UrOob *o,uint32_t now,uint8_t packet[UR_PACKET_MAX],uint8_t destination[6]){
     if(c->state!=UC_READY || now-c->oob.last_tx<UO_INTERVAL_MS)return 0;
-    /* The caller only schedules OOB after gameplay/control. One packet per
-     * 20 ms across all destinations, and exponential retry backoff per peer. */
+    /* The caller schedules OOB after gameplay/control. All profiles have
+     * room for 120 Hz fan-out plus ACKs.
+     * Reliable messages still use exponential retry backoff per peer. */
     for(unsigned k=0;k<4;k++){
         unsigned peer=(o->scan+k)&3;UoPeer *v=&o->peer[peer];int ack=v->ack_pending;
         if(!ack && (!(o->pending&(1u<<peer)) || o->uploaded!=o->total ||
@@ -158,6 +197,43 @@ static int next_lane(UrClient *c,UrOob *o,uint32_t now,uint8_t packet[UR_PACKET_
     }
     return 0;
 }
+static int snapshot_next(UrClient *c,uint32_t now,uint8_t packet[UR_PACKET_MAX],uint8_t destination[6]){
+    if(c->protocol!=UR_PROFILE_LOBBY || !un_snapshot_enabled(c->config) || c->state!=UC_READY || c->lobby.phase!=2 ||
+       c->snapshots.epoch!=c->lobby.epoch || now-c->oob.last_tx<UO_INTERVAL_MS)return 0;
+    for(unsigned k=0;k<4;k++){
+        unsigned peer=(c->oob.scan+k)&3u;
+        uint8_t mask=seat_mask(c,peer)&c->lobby.active&~c->history.local;
+        if(!mask || now-c->snapshots.sent_at[peer]<8u)continue;
+        uint8_t payload[32]={0xce,0,c->lobby.epoch,c->lobby.epoch>>8,mask,2,0,0};
+        unsigned count=0;
+        for(unsigned n=0;n<4 && count<2;n++){
+            unsigned car=(c->snapshots.stream_scan+n)&3u;
+            if(!(c->snapshots.pending[car]&mask))continue;
+            const uint8_t *v=c->snapshots.data[car];uint8_t *out=payload+8+11*count++;
+            uint16_t x=(uint16_t)v[2]|((uint16_t)v[3]<<8),y=(uint16_t)v[4]|((uint16_t)v[5]<<8);
+            out[0]=car|(v[9]<<2);out[1]=x;out[2]=(x>>8)|(y<<2);out[3]=y>>6;
+            out[4]=v[6];out[5]=v[7];out[6]=v[8];memcpy(out+7,v+10,4);
+            c->snapshots.pending[car]&=(uint8_t)~mask;
+        }
+        if(!count)continue;
+        payload[1]=11*count;c->snapshots.stream_scan=(c->snapshots.stream_scan+1u)&3u;
+        c->snapshots.sent_at[peer]=c->oob.last_tx=now;c->oob.scan=(peer+1u)&3u;
+        if(c->snapshots.sequence==UINT32_MAX){uc_fail(c,9);return 0;}
+        uint32_t id=++c->snapshots.sequence;
+        if(ud_mask(c,now)&(1u<<peer)){
+            UoPeer *wire=&c->oob.peer[peer];
+            if(wire->seq==UINT32_MAX){uc_fail(c,9);return 0;}
+            memcpy(destination,c->peers[peer].address,6);
+            return ur_seal(packet,c->peers[peer].key,8+c->peer,c->match,c->peer,
+                UD_OOB,++wire->seq,id,c->history.local,c->history.width|0xc0,payload);
+        }
+        if(c->oob.seq==UINT32_MAX){uc_fail(c,9);return 0;}
+        memcpy(destination,c->endpoint,6);
+        return ur_seal(packet,c->key,6,c->match,c->peer,UR_OOB,++c->oob.seq,id,
+            1u<<peer,c->history.width|0xc0,payload);
+    }
+    return 0;
+}
 int uo_next(UrClient *c,uint32_t now,uint8_t packet[UR_PACKET_MAX],uint8_t destination[6]){
     for(unsigned k=0;k<2;k++){
         unsigned lane=(c->message_turn+k)&1;
@@ -165,5 +241,5 @@ int uo_next(UrClient *c,uint32_t now,uint8_t packet[UR_PACKET_MAX],uint8_t desti
             c->message_turn=lane^1;return 1;
         }
     }
-    return 0;
+    return snapshot_next(c,now,packet,destination);
 }
